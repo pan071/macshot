@@ -642,6 +642,7 @@
 "Filename Template Tokens" = "檔案名稱範本代碼";
 "Filename tokens" = "檔案名稱代碼";
 "Filename:" = "檔案名稱：";
+"Pin the current clipboard image or text to the screen" = "將目前剪貼簿中的影像或文字固定到螢幕";
 "Open an image file in the editor" = "在編輯器中開啟影像檔案";
 "Open the recent captures overlay" = "開啟最近擷取的覆蓋層";
 "Open this settings window" = "開啟此設定視窗";
