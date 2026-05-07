@@ -1216,9 +1216,41 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
 
     /// Pins the current clipboard image directly to the screen without opening the editor.
     @objc private func pinImageFromClipboard() {
-        guard let image = clipboardImageOrShowAlert() else { return }
+        guard let image = clipboardPinnableImageOrShowAlert() else { return }
         // Reuse the existing floating pin window flow so the shortcut matches the in-app Pin action.
         showPin(image: image)
+    }
+
+    /// Reads an image from the clipboard for the pin flow, or renders clipboard text/rich text into an image when needed.
+    private func clipboardPinnableImageOrShowAlert() -> NSImage? {
+        // Read the current pasteboard snapshot exactly once so every fallback sees the same clipboard contents.
+        let pasteboard = NSPasteboard.general
+
+        // Prefer actual image files copied from Finder so pinning uses the original bitmap pixels.
+        if let image = clipboardImageFromFileURL(in: pasteboard) {
+            return image
+        }
+
+        // Fall back to raw image data already placed on the clipboard by browsers, preview apps, or macshot itself.
+        if let image = NSImage(pasteboard: pasteboard), image.isValid,
+           image.size.width > 0, image.size.height > 0 {
+            return image
+        }
+
+        // If the clipboard contains styled text or plain text, render it into an image so "Pin from Clipboard" still works.
+        if let attributedText = clipboardAttributedText(in: pasteboard),
+           let renderedImage = renderClipboardTextImage(from: attributedText) {
+            return renderedImage
+        }
+
+        // Keep the clipboard alert consistent with the existing open/pin flows, but mention text support now.
+        let alert = NSAlert()
+        alert.messageText = L("No Image or Text on Clipboard")
+        alert.informativeText = L("Copy an image or text to the clipboard first, then try again.")
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: L("OK"))
+        alert.runModal()
+        return nil
     }
 
     /// Reads an image from the clipboard and shows the standard alert when no valid image is available.
@@ -1242,6 +1274,143 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
             alert.runModal()
             return nil
         }
+        return image
+    }
+
+    /// Extracts the richest attributed text representation currently available on the clipboard.
+    private func clipboardAttributedText(in pasteboard: NSPasteboard) -> NSAttributedString? {
+        if let attributedTextObjects = pasteboard.readObjects(
+            forClasses: [NSAttributedString.self],
+            options: nil
+        ) as? [NSAttributedString] {
+            for attributedText in attributedTextObjects where !attributedText.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // Prefer the concrete attributed string object from the pasteboard because AppKit has already resolved the richest style payload.
+                return attributedText
+            }
+        }
+
+        // Prefer RTFD because it preserves the most structure, then RTF/HTML, then finally plain text.
+        let richTextLoaders: [(NSPasteboard.PasteboardType, (Data) -> NSAttributedString?)] = [
+            (.rtfd, { data in
+                NSAttributedString(
+                    rtfd: data,
+                    documentAttributes: nil
+                )
+            }),
+            (.rtf, { data in
+                NSAttributedString(
+                    rtf: data,
+                    documentAttributes: nil
+                )
+            }),
+            (.html, { data in
+                try? NSAttributedString(
+                    data: data,
+                    options: [
+                        .documentType: NSAttributedString.DocumentType.html,
+                        .characterEncoding: String.Encoding.utf8.rawValue,
+                    ],
+                    documentAttributes: nil
+                )
+            }),
+        ]
+
+        for (type, loader) in richTextLoaders {
+            // Try each rich representation in priority order so we keep as much styling as possible.
+            if let data = pasteboard.data(forType: type),
+               let attributedText = loader(data),
+               !attributedText.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return attributedText
+            }
+        }
+
+        // Plain text still becomes a pin image, using a readable default monospaced style.
+        guard let plainText = pasteboard.string(forType: .string)?
+            .trimmingCharacters(in: .newlines),
+              !plainText.isEmpty else {
+            return nil
+        }
+
+        return NSAttributedString(
+            string: plainText,
+            attributes: [
+                .font: NSFont.monospacedSystemFont(ofSize: 15, weight: .regular),
+                .foregroundColor: NSColor(calibratedWhite: 0.12, alpha: 1.0),
+            ]
+        )
+    }
+
+    /// Renders clipboard text into a bitmap image so it can be reused by the existing pin workflow.
+    private func renderClipboardTextImage(from attributedText: NSAttributedString) -> NSImage? {
+        let mutableText = NSMutableAttributedString(attributedString: attributedText)
+        let fullRange = NSRange(location: 0, length: mutableText.length)
+        let baseFont = NSFont.systemFont(ofSize: 15)
+
+        // Fill in any missing foreground color/font so partially styled clipboard text always remains visible.
+        attributedText.enumerateAttributes(in: fullRange, options: []) { attributes, range, _ in
+            if attributes[.font] == nil {
+                mutableText.addAttribute(.font, value: baseFont, range: range)
+            }
+            if attributes[.foregroundColor] == nil {
+                mutableText.addAttribute(
+                    .foregroundColor,
+                    value: NSColor(calibratedWhite: 0.12, alpha: 1.0),
+                    range: range
+                )
+            }
+        }
+
+        let horizontalPadding: CGFloat = 18
+        let verticalPadding: CGFloat = 16
+        let maxContentWidth: CGFloat = 880
+        let textStorage = NSTextStorage(attributedString: mutableText)
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(
+            containerSize: NSSize(width: maxContentWidth, height: .greatestFiniteMagnitude)
+        )
+        textContainer.lineFragmentPadding = 0
+        textContainer.widthTracksTextView = false
+        textContainer.heightTracksTextView = false
+        layoutManager.addTextContainer(textContainer)
+        textStorage.addLayoutManager(layoutManager)
+        layoutManager.ensureLayout(for: textContainer)
+
+        let glyphRange = layoutManager.glyphRange(for: textContainer)
+        let usedRect = layoutManager.usedRect(for: textContainer)
+        let extraLineHeight = layoutManager.extraLineFragmentRect.height
+        let textWidth = ceil(usedRect.width)
+        let textHeight = ceil(usedRect.height + extraLineHeight)
+
+        // Keep tiny clipboard strings readable while still allowing long formatted blocks to wrap cleanly.
+        let finalWidth = max(220, textWidth + horizontalPadding * 2)
+        let finalHeight = max(56, textHeight + verticalPadding * 2 + 2)
+        let imageSize = NSSize(width: finalWidth, height: finalHeight)
+        let image = NSImage(size: imageSize)
+        image.lockFocus()
+
+        // Use a solid white background so copied text from browsers/editors reads like a clean pasted card.
+        NSColor.white.setFill()
+        NSBezierPath(roundedRect: NSRect(origin: .zero, size: imageSize), xRadius: 10, yRadius: 10).fill()
+
+        // Add a subtle border so light-colored text captures still stand out against bright desktops.
+        NSColor(calibratedWhite: 0.86, alpha: 1.0).setStroke()
+        let borderRect = NSRect(origin: .zero, size: imageSize).insetBy(dx: 0.5, dy: 0.5)
+        let borderPath = NSBezierPath(roundedRect: borderRect, xRadius: 10, yRadius: 10)
+        borderPath.lineWidth = 1
+        borderPath.stroke()
+
+        let drawRect = NSRect(
+            x: horizontalPadding,
+            y: verticalPadding + 1,
+            width: imageSize.width - horizontalPadding * 2,
+            height: imageSize.height - verticalPadding * 2 - 1
+        )
+        mutableText.draw(
+            with: drawRect,
+            options: [.usesLineFragmentOrigin, .usesFontLeading]
+        )
+
+        image.unlockFocus()
         return image
     }
 
