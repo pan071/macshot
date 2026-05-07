@@ -13,7 +13,12 @@ struct CaptureAnnotationData {
 protocol OverlayWindowControllerDelegate: AnyObject {
     func overlayDidCancel(_ controller: OverlayWindowController)
     func overlayDidConfirm(_ controller: OverlayWindowController, capturedImage: NSImage?, annotationData: CaptureAnnotationData?)
-    func overlayDidRequestPin(_ controller: OverlayWindowController, image: NSImage)
+    func overlayDidRequestPin(
+        _ controller: OverlayWindowController,
+        image: NSImage,
+        screen: NSScreen,
+        sourceFrame: NSRect
+    )
     func overlayDidRequestOCR(_ controller: OverlayWindowController, text: String, image: NSImage?)
     func overlayDidRequestUpload(_ controller: OverlayWindowController, image: NSImage)
     func overlayDidRequestStartRecording(
@@ -393,9 +398,21 @@ extension OverlayWindowController: OverlayViewDelegate {
     func overlayViewDidRequestPin() {
         guard var image = captureRegion() else { return }
         image = applyBeautifyIfNeeded(image) ?? image
+        let sourceFrame = NSRect(
+            x: screen.frame.minX + selectionRect.minX,
+            y: screen.frame.minY + selectionRect.minY,
+            width: selectionRect.width,
+            height: selectionRect.height
+        )
         playCopySound()
         dismiss()
-        overlayDelegate?.overlayDidRequestPin(self, image: image)
+        // Carry the current overlay screen through the pin flow so the floating pin opens on the same display.
+        overlayDelegate?.overlayDidRequestPin(
+            self,
+            image: image,
+            screen: screen,
+            sourceFrame: sourceFrame
+        )
     }
 
     func overlayViewDidRequestOCR() {

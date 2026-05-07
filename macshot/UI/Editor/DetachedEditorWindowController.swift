@@ -387,7 +387,8 @@ extension DetachedEditorWindowController: OverlayViewDelegate {
         guard let raw = overlayView?.captureSelectedRegion() else { return }
         let image = applyPostProcessing(raw)
         playCopySound()
-        (NSApp.delegate as? AppDelegate)?.showPin(image: image)
+        // Keep the pin on the same display as the editor window so the action feels spatially consistent.
+        (NSApp.delegate as? AppDelegate)?.showPin(image: image, preferredScreen: window?.screen)
         autoSaveToHistoryIfNeeded(compositedImage: image)
     }
 
@@ -641,7 +642,14 @@ private class AddCaptureOverlayHandler: NSObject, OverlayWindowControllerDelegat
         }
     }
 
-    func overlayDidRequestPin(_ controller: OverlayWindowController, image: NSImage) {
+    func overlayDidRequestPin(
+        _ controller: OverlayWindowController,
+        image: NSImage,
+        screen: NSScreen,
+        sourceFrame: NSRect
+    ) {
+        _ = screen
+        _ = sourceFrame
         dismissOverlays()
         onCapture?(image)
     }
