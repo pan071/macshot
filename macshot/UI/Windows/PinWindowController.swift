@@ -15,29 +15,38 @@ class PinWindowController {
     private var pinView: PinView?
     private let image: NSImage
     private let initialWindowSize: NSSize
+    private let initialWindowOrigin: NSPoint
     private static let minScale: CGFloat = 0.1
     private static let maxScale: CGFloat = 5.0
 
-    init(image: NSImage) {
+    init(image: NSImage, preferredScreen: NSScreen? = nil, preferredFrame: NSRect? = nil) {
         self.image = image
 
         let size = image.size
         // An initializer can't bail, and a pin is worth showing even if macOS
         // reports no display right now (it will land on one when a display
         // returns), so fall back to a plausible frame.
-        let screenFrame = NSScreen.preferredVisibleFrame
+        let screenFrame = preferredScreen?.visibleFrame ?? NSScreen.preferredVisibleFrame
 
-        // Center on screen, cap at 80% of screen size
-        let maxW = screenFrame.width * 0.8
-        let maxH = screenFrame.height * 0.8
-        let scale = min(1.0, min(maxW / size.width, maxH / size.height))
-        let windowSize = NSSize(width: size.width * scale, height: size.height * scale)
+        let windowSize: NSSize
+        let origin: NSPoint
+        if let preferredFrame, preferredFrame.width > 1, preferredFrame.height > 1 {
+            // For screenshot pins, keep the pinned image exactly where the capture originally happened.
+            windowSize = preferredFrame.size
+            origin = preferredFrame.origin
+        } else {
+            // Fallback for clipboard/history pins: center on the requested screen and cap at 80% size.
+            let maxW = screenFrame.width * 0.8
+            let maxH = screenFrame.height * 0.8
+            let scale = min(1.0, min(maxW / size.width, maxH / size.height))
+            windowSize = NSSize(width: size.width * scale, height: size.height * scale)
+            origin = NSPoint(
+                x: screenFrame.midX - windowSize.width / 2,
+                y: screenFrame.midY - windowSize.height / 2
+            )
+        }
         self.initialWindowSize = windowSize
-
-        let origin = NSPoint(
-            x: screenFrame.midX - windowSize.width / 2,
-            y: screenFrame.midY - windowSize.height / 2
-        )
+        self.initialWindowOrigin = origin
 
         let panel = PinPanel(
             contentRect: NSRect(origin: origin, size: windowSize),
@@ -112,14 +121,7 @@ class PinWindowController {
 
     private func resetZoom() {
         guard let window = window else { return }
-        let oldFrame = window.frame
-        let centerX = oldFrame.midX
-        let centerY = oldFrame.midY
-        let newOrigin = NSPoint(
-            x: centerX - initialWindowSize.width / 2,
-            y: centerY - initialWindowSize.height / 2
-        )
-        window.setFrame(NSRect(origin: newOrigin, size: initialWindowSize), display: true)
+        window.setFrame(NSRect(origin: initialWindowOrigin, size: initialWindowSize), display: true)
         pinView?.zoomPercent = 100
     }
 

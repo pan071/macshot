@@ -2171,8 +2171,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         toast.showError(message: message, asUploadFailure: false)
     }
 
-    func showPin(image: NSImage) {
-        let pin = PinWindowController(image: image)
+    /// Shows a floating pinned image, optionally forcing it onto a specific display.
+    func showPin(image: NSImage, preferredScreen: NSScreen? = nil) {
+        let pin = PinWindowController(image: image, preferredScreen: preferredScreen)
         pin.delegate = self
         pin.show()
         pinControllers.append(pin)
@@ -2686,7 +2687,13 @@ extension AppDelegate: OverlayWindowControllerDelegate {
         return NSImage(cgImage: cgImage, size: globalRect.size)
     }
 
-    func overlayDidRequestPin(_ controller: OverlayWindowController, image: NSImage, annotationData: CaptureAnnotationData?) {
+    func overlayDidRequestPin(
+        _ controller: OverlayWindowController,
+        image: NSImage,
+        annotationData: CaptureAnnotationData?,
+        screen: NSScreen,
+        sourceFrame: NSRect
+    ) {
         ScreenshotHistory.shared.add(
             image: image,
             rawImage: annotationData?.rawImage,
@@ -2695,7 +2702,11 @@ extension AppDelegate: OverlayWindowControllerDelegate {
         )
         let appToRefocus = previousApp
         dismissOverlays(refocusPreviousApp: false)
-        let pin = PinWindowController(image: image)
+        let pin = PinWindowController(
+            image: image,
+            preferredScreen: screen,
+            preferredFrame: sourceFrame
+        )
         pin.delegate = self
         pin.show()
         pinControllers.append(pin)
