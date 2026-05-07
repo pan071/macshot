@@ -446,6 +446,8 @@ class OverlayView: NSView {
     }
     private var bottomStripView: ToolbarStripView?
     private var rightStripView: ToolbarStripView?
+    private var isToolbarSelectionMoveActive: Bool = false
+    private var toolbarSelectionMoveOffset: NSPoint = .zero
     private var toolOptionsRowView: ToolOptionsRowView?
 
     /// Intended overlay-space rect of the options row. .zero when the row is hidden.
@@ -5173,7 +5175,11 @@ class OverlayView: NSView {
                 self?.handleToolbarButtonHover(action, hovered: hovered, strip: self?.bottomStripView)
             }
         }
-        if rightStripView?.buttonViews.count == rightButtons.count && rightStripView?.buttonViews.count ?? 0 > 0 {
+        let rightStripActions = rightStripView?.currentActions() ?? []
+        let shouldRebuildRightStrip =
+            rightStripView?.buttonViews.count != rightButtons.count
+            || rightStripActions != rightButtons.map(\.action)
+        if !shouldRebuildRightStrip && rightStripView?.buttonViews.count ?? 0 > 0 {
             rightStripView?.updateState(from: rightButtons)
         } else {
             rightStripView?.setButtons(rightButtons)
@@ -5184,11 +5190,23 @@ class OverlayView: NSView {
             rightStripView?.onHover = { [weak self] action, hovered in
                 self?.handleToolbarButtonHover(action, hovered: hovered, strip: self?.rightStripView)
             }
+            rightStripView?.onButtonPressDragged = { [weak self] action, _, event in
+                self?.handleRightToolbarButtonDragged(action, event: event)
+            }
+            rightStripView?.onButtonPressEnded = { [weak self] action, _, event in
+                self?.handleRightToolbarButtonPressEnded(action, event: event)
+            }
+            rightStripView?.onReorder = { [weak self] actions in
+                self?.handleRightToolbarReorder(actions)
+            }
         }
-        // Move button needs onMouseDown for press-and-drag (synchronous tracking loop)
+        rightStripView?.isReorderEnabled = !isRecording && !isEditorMode
+
+        // Move-selection now follows press-drag callbacks so long-press reordering still works.
         for bv in rightStripView?.buttonViews ?? [] {
-            if case .moveSelection = bv.action, bv.onMouseDown == nil {
-                bv.onMouseDown = { [weak self] _ in self?.handleToolbarAction(.moveSelection) }
+            if case .moveSelection = bv.action {
+                bv.onMouseDown = nil
+                bv.suppressClickAction = true
             }
         }
 
@@ -5210,6 +5228,86 @@ class OverlayView: NSView {
 
         repositionToolbars()
         updateResolutionBox()
+    }
+
+    /// Persists the user's right-toolbar reorder result and keeps the current state aligned.
+    private func handleRightToolbarReorder(_ actions: [ToolbarButtonAction]) {
+        // Only the normal screenshot right toolbar participates in persisted custom ordering.
+        ToolbarLayout.saveRightToolbarOrder(actions)
+        rightButtons = ToolbarLayout.applyPersistedRightToolbarOrder(to: rightButtons)
+    }
+
+    /// Routes right-toolbar drag gestures to buttons that have custom press-drag behavior.
+    private func handleRightToolbarButtonDragged(_ action: ToolbarButtonAction, event: NSEvent) {
+        switch action {
+        case .moveSelection:
+            guard rightStripView?.isPerformingReorder == false else { return }
+            if !isToolbarSelectionMoveActive {
+                beginToolbarSelectionMove(with: event)
+            }
+            updateToolbarSelectionMove(with: event)
+        default:
+            break
+        }
+    }
+
+    /// Finishes any right-toolbar press-drag interaction after the pointer is released.
+    private func handleRightToolbarButtonPressEnded(_ action: ToolbarButtonAction, event: NSEvent) {
+        _ = event
+        switch action {
+        case .moveSelection:
+            endToolbarSelectionMoveIfNeeded()
+        default:
+            break
+        }
+    }
+
+    /// Starts moving the current selection from the toolbar button drag gesture.
+    private func beginToolbarSelectionMove(with event: NSEvent) {
+        // Moving a snapped window selection should restore the normal freeform selection first.
+        if selectionIsWindowSnap {
+            selectionIsWindowSnap = false
+            snappedWindowID = nil
+            snappedWindowImage = nil
+        }
+
+        let startPoint = convert(event.locationInWindow, from: nil)
+        toolbarSelectionMoveOffset = NSPoint(
+            x: startPoint.x - selectionRect.origin.x,
+            y: startPoint.y - selectionRect.origin.y
+        )
+        isToolbarSelectionMoveActive = true
+        hoveredTooltip = L("Drag to reposition")
+        needsDisplay = true
+        displayIfNeeded()
+    }
+
+    /// Updates the selection origin while the toolbar move gesture is in progress.
+    private func updateToolbarSelectionMove(with event: NSEvent) {
+        guard isToolbarSelectionMoveActive else { return }
+
+        let point = convert(event.locationInWindow, from: nil)
+        selectionRect.origin = NSPoint(
+            x: point.x - toolbarSelectionMoveOffset.x,
+            y: point.y - toolbarSelectionMoveOffset.y
+        )
+
+        // Keep webcam setup UI attached to the moving selection if it is currently shown.
+        if webcamSetupPreview != nil {
+            repositionWebcamSetupPreview()
+        }
+        needsDisplay = true
+        displayIfNeeded()
+    }
+
+    /// Completes toolbar-driven selection movement and restores the hover tooltip state.
+    private func endToolbarSelectionMoveIfNeeded() {
+        guard isToolbarSelectionMoveActive else { return }
+
+        isToolbarSelectionMoveActive = false
+        hoveredTooltip = hoveredTooltipButtonView?.tooltipText
+        scheduleBarcodeDetection()
+        needsDisplay = true
     }
 
     /// Reposition toolbar strips based on current selection/bounds. Cheap — safe to call from draw().
