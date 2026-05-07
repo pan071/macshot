@@ -107,6 +107,7 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
     private var doubleClickToCopyCheckbox: NSButton!
     private var hideCaptureInstructionsCheckbox: NSButton!
     private var disableSelectionShadowCheckbox: NSButton!
+    private var pinDoubleClickCloseCheckbox: NSButton!
     private var filenameTemplateField: NSTextField!
     private var filenameTemplatePreview: NSTextField!
     private var recordingFilenameTemplateField: NSTextField!
@@ -810,6 +811,7 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
         doubleClickToCopyCheckbox = NSButton(checkboxWithTitle: L("Double-click selection to copy"), target: self, action: #selector(doubleClickToCopyChanged(_:)))
         hideCaptureInstructionsCheckbox = NSButton(checkboxWithTitle: L("Hide capture instructions"), target: self, action: #selector(hideCaptureInstructionsChanged(_:)))
         disableSelectionShadowCheckbox = NSButton(checkboxWithTitle: L("Disable shadow outside selection"), target: self, action: #selector(disableSelectionShadowChanged(_:)))
+        pinDoubleClickCloseCheckbox = NSButton(checkboxWithTitle: L("Double-click a pinned image to close it"), target: self, action: #selector(pinDoubleClickCloseChanged(_:)))
         filenameTemplateField = NSTextField()
         filenameTemplateField.placeholderString = FilenameFormatter.defaultTemplate
         filenameTemplateField.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
@@ -907,6 +909,9 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
         stack.setCustomSpacing(6, after: stack.arrangedSubviews.last!)
 
         stack.addArrangedSubview(indented(disableSelectionShadowCheckbox))
+        stack.setCustomSpacing(6, after: stack.arrangedSubviews.last!)
+
+        stack.addArrangedSubview(indented(pinDoubleClickCloseCheckbox))
         stack.setCustomSpacing(20, after: stack.arrangedSubviews.last!)
 
         // ── Output ───────────────────────────────────────────
@@ -2694,6 +2699,8 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
         doubleClickToCopyCheckbox.state = (UserDefaults.standard.object(forKey: "doubleClickToCopy") as? Bool ?? true) ? .on : .off
         hideCaptureInstructionsCheckbox.state = UserDefaults.standard.bool(forKey: "hideCaptureInstructions") ? .on : .off
         disableSelectionShadowCheckbox.state = UserDefaults.standard.bool(forKey: "disableSelectionOutsideShadow") ? .on : .off
+        let pinDoubleClickCloseEnabled = UserDefaults.standard.object(forKey: "pinCloseOnDoubleClick") as? Bool ?? false
+        pinDoubleClickCloseCheckbox.state = pinDoubleClickCloseEnabled ? .on : .off
         filenameTemplateField.stringValue = UserDefaults.standard.string(forKey: FilenameFormatter.userDefaultsKey) ?? FilenameFormatter.defaultTemplate
         updateFilenamePreview()
         recordingFilenameTemplateField.stringValue = UserDefaults.standard.string(forKey: FilenameFormatter.recordingUserDefaultsKey) ?? FilenameFormatter.defaultRecordingTemplate
@@ -3172,6 +3179,11 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
     }
     @objc private func disableSelectionShadowChanged(_ sender: NSButton) {
         UserDefaults.standard.set(sender.state == .on, forKey: "disableSelectionOutsideShadow")
+    }
+    /// Persists whether pinned screenshots should close when the user double-clicks the image background.
+    @objc private func pinDoubleClickCloseChanged(_ sender: NSButton) {
+        // Store the toggle directly so future pin windows can read the latest preference without additional state wiring.
+        UserDefaults.standard.set(sender.state == .on, forKey: "pinCloseOnDoubleClick")
     }
     @objc private func filenameTemplateCommitted(_ sender: NSTextField) {
         let trimmed = sender.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
