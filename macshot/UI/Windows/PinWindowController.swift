@@ -133,8 +133,11 @@ class PinWindowController {
     }
 
     private func openInEditor() {
-        DetachedEditorWindowController.open(image: image)
-        close()
+        // Keep the original pin visible so editing acts like opening a separate working copy rather than consuming the pinned image.
+        DetachedEditorWindowController.open(
+            image: image,
+            windowLevel: NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
+        )
     }
 }
 
