@@ -235,6 +235,7 @@
 "Hide capture instructions" = "隱藏截圖操作提示";
 "Disable shadow outside selection" = "停用選取範圍外的陰影";
 "Show shortcuts in tooltips" = "在工具提示中顯示快捷鍵";
+"Double-click a pinned image to close it" = "雙擊固定圖片時關閉";
 "Use window title in saved filename" = "在儲存的檔案名稱中使用視窗標題";
 "Hide menu bar icon" = "隱藏選單列圖像";
 "Hotkeys still work. To show the icon again, re-launch macshot." = "快捷鍵仍可使用。若要再次顯示圖像，請重新啟動 macshot。";
