@@ -1285,7 +1285,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         ) as? [NSAttributedString] {
             for attributedText in attributedTextObjects where !attributedText.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 // Prefer the concrete attributed string object from the pasteboard because AppKit has already resolved the richest style payload.
-                return attributedText
+                return trimmedClipboardAttributedText(attributedText)
             }
         }
 
@@ -1320,7 +1320,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
             if let data = pasteboard.data(forType: type),
                let attributedText = loader(data),
                !attributedText.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return attributedText
+                return trimmedClipboardAttributedText(attributedText)
             }
         }
 
@@ -1338,6 +1338,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
                 .foregroundColor: NSColor(calibratedWhite: 0.12, alpha: 1.0),
             ]
         )
+    }
+
+    /// Removes clipboard-added trailing newline characters while preserving the attributed text's original styling.
+    private func trimmedClipboardAttributedText(_ attributedText: NSAttributedString) -> NSAttributedString {
+        let originalNSString = attributedText.string as NSString
+        let trimmedString = attributedText.string.trimmingCharacters(in: .newlines)
+        guard trimmedString != attributedText.string else { return attributedText }
+
+        let mutableText = NSMutableAttributedString(attributedString: attributedText)
+        let trimmedLength = (trimmedString as NSString).length
+        let trailingRange = NSRange(location: trimmedLength, length: originalNSString.length - trimmedLength)
+        if trailingRange.length > 0 {
+            // Editors often copy an extra line break at the end of a block; removing it avoids a fake blank area below the content.
+            mutableText.deleteCharacters(in: trailingRange)
+        }
+        return mutableText
     }
 
     /// Renders clipboard text into a bitmap image so it can be reused by the existing pin workflow.
@@ -1375,15 +1391,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         textStorage.addLayoutManager(layoutManager)
         layoutManager.ensureLayout(for: textContainer)
 
-        let glyphRange = layoutManager.glyphRange(for: textContainer)
         let usedRect = layoutManager.usedRect(for: textContainer)
-        let extraLineHeight = layoutManager.extraLineFragmentRect.height
         let textWidth = ceil(usedRect.width)
-        let textHeight = ceil(usedRect.height + extraLineHeight)
+        let textHeight = ceil(usedRect.height)
 
         // Keep tiny clipboard strings readable while still allowing long formatted blocks to wrap cleanly.
         let finalWidth = max(220, textWidth + horizontalPadding * 2)
-        let finalHeight = max(56, textHeight + verticalPadding * 2 + 2)
+        let finalHeight = max(56, textHeight + verticalPadding * 2 + 4)
         let imageSize = NSSize(width: finalWidth, height: finalHeight)
         let image = NSImage(size: imageSize)
         image.lockFocus()
