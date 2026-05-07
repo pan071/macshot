@@ -13,9 +13,9 @@ class PinWindowController {
 
     private var window: NSPanel?
     private var pinView: PinView?
-    private let image: NSImage
-    private let initialWindowSize: NSSize
-    private let initialWindowOrigin: NSPoint
+    private var image: NSImage
+    private var initialWindowSize: NSSize
+    private var initialWindowOrigin: NSPoint
     private static let minScale: CGFloat = 0.1
     private static let maxScale: CGFloat = 5.0
 
@@ -73,6 +73,12 @@ class PinWindowController {
         }
         view.onEdit = { [weak self] in
             self?.openInEditor()
+        }
+        view.onRotateLeft = { [weak self] in
+            self?.rotatePinnedImage(counterClockwise: true)
+        }
+        view.onRotateRight = { [weak self] in
+            self?.rotatePinnedImage(counterClockwise: false)
         }
         view.onZoom = { [weak self] factor, viewPoint in
             self?.zoom(by: factor, around: viewPoint)
@@ -142,6 +148,65 @@ class PinWindowController {
             windowLevel: NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
         )
     }
+
+    /// Rotates the pinned image by 90 degrees and keeps the current zoom percentage stable.
+    private func rotatePinnedImage(counterClockwise: Bool) {
+        guard let rotatedImage = rotatedImage(from: image, counterClockwise: counterClockwise),
+              let window else { return }
+
+        let oldFrame = window.frame
+        let oldBaseSize = initialWindowSize
+        let scale = oldBaseSize.width > 0 ? oldFrame.width / oldBaseSize.width : 1.0
+        let newBaseSize = NSSize(width: oldBaseSize.height, height: oldBaseSize.width)
+        let newFrameSize = NSSize(width: newBaseSize.width * scale, height: newBaseSize.height * scale)
+        // Keep the visual center stable so rotating a pin does not jump to another part of the screen.
+        let newOrigin = NSPoint(
+            x: oldFrame.midX - newFrameSize.width / 2,
+            y: oldFrame.midY - newFrameSize.height / 2
+        )
+
+        image = rotatedImage
+        initialWindowSize = newBaseSize
+        initialWindowOrigin = newOrigin
+        pinView?.image = rotatedImage
+        window.contentAspectRatio = rotatedImage.size
+        window.setFrame(NSRect(origin: newOrigin, size: newFrameSize), display: true)
+        pinView?.zoomPercent = Int(round(scale * 100))
+    }
+
+    /// Creates a new image rotated 90 degrees from the current pinned image.
+    private func rotatedImage(from image: NSImage, counterClockwise: Bool) -> NSImage? {
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+
+        let sourceWidth = cgImage.width
+        let sourceHeight = cgImage.height
+        let colorSpace = cgImage.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!
+        let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        guard let ctx = CGContext(
+            data: nil,
+            width: sourceHeight,
+            height: sourceWidth,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
+        ) else { return nil }
+
+        // Rotate in pixel space so the pin keeps crisp edges and the alpha channel intact.
+        if counterClockwise {
+            ctx.translateBy(x: 0, y: CGFloat(sourceWidth))
+            ctx.rotate(by: -.pi / 2)
+        } else {
+            ctx.translateBy(x: CGFloat(sourceHeight), y: 0)
+            ctx.rotate(by: .pi / 2)
+        }
+        ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: sourceWidth, height: sourceHeight))
+        guard let rotatedCGImage = ctx.makeImage() else { return nil }
+        return NSImage(
+            cgImage: rotatedCGImage,
+            size: NSSize(width: image.size.height, height: image.size.width)
+        )
+    }
 }
 
 // MARK: - Pin Panel (receives gesture events without activating the app)
@@ -190,12 +255,18 @@ private class PinView: NSView {
 
     var onClose: (() -> Void)?
     var onEdit: (() -> Void)?
+    var onRotateLeft: (() -> Void)?
+    var onRotateRight: (() -> Void)?
     var onZoom: ((CGFloat, NSPoint) -> Void)?
     var onResetZoom: (() -> Void)?
 
-    private let image: NSImage
+    var image: NSImage {
+        didSet { needsDisplay = true }
+    }
     private var closeButton: NSButton?
     private var editButton: NSButton?
+    private var rotateLeftButton: NSButton?
+    private var rotateRightButton: NSButton?
     private var zoomLabel: NSTextField?
     private var trackingArea: NSTrackingArea?
     private var isHovering = false
@@ -241,6 +312,14 @@ private class PinView: NSView {
         addSubview(edit)
         editButton = edit
 
+        let rotateLeft = makeOverlayButton(symbol: "rotate.left", action: #selector(rotateLeftClicked))
+        addSubview(rotateLeft)
+        rotateLeftButton = rotateLeft
+
+        let rotateRight = makeOverlayButton(symbol: "rotate.right", action: #selector(rotateRightClicked))
+        addSubview(rotateRight)
+        rotateRightButton = rotateRight
+
         let close = makeOverlayButton(symbol: "xmark", action: #selector(closeClicked))
         addSubview(close)
         closeButton = close
@@ -269,6 +348,16 @@ private class PinView: NSView {
         onEdit?()
     }
 
+    /// Forwards the left-rotation action to the owning pin controller.
+    @objc private func rotateLeftClicked() {
+        onRotateLeft?()
+    }
+
+    /// Forwards the right-rotation action to the owning pin controller.
+    @objc private func rotateRightClicked() {
+        onRotateRight?()
+    }
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let existing = trackingArea {
@@ -282,6 +371,8 @@ private class PinView: NSView {
     override func mouseEntered(with event: NSEvent) {
         isHovering = true
         editButton?.isHidden = false
+        rotateLeftButton?.isHidden = false
+        rotateRightButton?.isHidden = false
         closeButton?.isHidden = false
         zoomLabel?.isHidden = false
     }
@@ -289,6 +380,8 @@ private class PinView: NSView {
     override func mouseExited(with event: NSEvent) {
         isHovering = false
         editButton?.isHidden = true
+        rotateLeftButton?.isHidden = true
+        rotateRightButton?.isHidden = true
         closeButton?.isHidden = true
         zoomLabel?.isHidden = true
     }
@@ -298,13 +391,14 @@ private class PinView: NSView {
         // Close button top-right, edit button to its left, zoom label to its left
         let btnSize: CGFloat = 24
         let btnY = bounds.maxY - 30
-        let btnCenterY = btnY + btnSize / 2
         closeButton?.frame = NSRect(x: bounds.maxX - 30, y: btnY, width: btnSize, height: btnSize)
         editButton?.frame  = NSRect(x: bounds.maxX - 58, y: btnY, width: btnSize, height: btnSize)
+        rotateRightButton?.frame = NSRect(x: bounds.maxX - 86, y: btnY, width: btnSize, height: btnSize)
+        rotateLeftButton?.frame = NSRect(x: bounds.maxX - 114, y: btnY, width: btnSize, height: btnSize)
         if let label = zoomLabel {
             let labelW = max(label.intrinsicContentSize.width + 14, 42)
             label.frame = NSRect(
-                x: bounds.maxX - 58 - labelW - 6,
+                x: bounds.maxX - 114 - labelW - 6,
                 y: btnY,
                 width: labelW,
                 height: btnSize

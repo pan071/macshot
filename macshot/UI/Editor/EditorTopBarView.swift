@@ -1,7 +1,7 @@
 import Cocoa
 
 /// Real NSView top bar for the editor window. Pinned to top of container.
-/// Contains: pixel dimensions, crop/flip/add-capture buttons, zoom dropdown.
+/// Contains: pixel dimensions, crop/rotate/flip/add-capture buttons, zoom dropdown.
 class EditorTopBarView: NSView {
 
     weak var overlayView: OverlayView?
@@ -21,6 +21,9 @@ class EditorTopBarView: NSView {
         sizeLabel.textColor = ToolbarLayout.iconColor.withAlphaComponent(0.45)
 
         let cropBtn = makeButton("crop", tooltip: L("Crop"), action: #selector(cropClicked))
+        let rotateLeftBtn = makeButton("rotate.left", tooltip: L("Rotate Left 90°"), action: #selector(rotateLeftClicked))
+        let rotateRightBtn = makeButton("rotate.right", tooltip: L("Rotate Right 90°"), action: #selector(rotateRightClicked))
+        let rotate180Btn = makeTextButton("180°", tooltip: L("Rotate 180°"), action: #selector(rotate180Clicked))
         let flipHBtn = makeButton("arrow.left.and.right.righttriangle.left.righttriangle.right", tooltip: L("Flip Horizontal"), action: #selector(flipHClicked))
         let flipVBtn = makeButton("arrow.up.and.down.righttriangle.up.righttriangle.down", tooltip: L("Flip Vertical"), action: #selector(flipVClicked))
         let addCaptureBtn = makeButton("rectangle.badge.plus", tooltip: L("Add Capture"), action: #selector(addCaptureClicked))
@@ -43,7 +46,7 @@ class EditorTopBarView: NSView {
         addSubview(border)
 
         // Layout with constraints
-        for v: NSView in [sizeLabel, cropBtn, flipHBtn, flipVBtn, addCaptureBtn, zoomButton] {
+        for v: NSView in [sizeLabel, cropBtn, rotateLeftBtn, rotateRightBtn, rotate180Btn, flipHBtn, flipVBtn, addCaptureBtn, zoomButton] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -59,7 +62,22 @@ class EditorTopBarView: NSView {
             cropBtn.widthAnchor.constraint(equalToConstant: 24),
             cropBtn.heightAnchor.constraint(equalToConstant: 22),
 
-            flipHBtn.leadingAnchor.constraint(equalTo: cropBtn.trailingAnchor, constant: 4),
+            rotateLeftBtn.leadingAnchor.constraint(equalTo: cropBtn.trailingAnchor, constant: 4),
+            rotateLeftBtn.centerYAnchor.constraint(equalTo: centerYAnchor),
+            rotateLeftBtn.widthAnchor.constraint(equalToConstant: 24),
+            rotateLeftBtn.heightAnchor.constraint(equalToConstant: 22),
+
+            rotateRightBtn.leadingAnchor.constraint(equalTo: rotateLeftBtn.trailingAnchor, constant: 4),
+            rotateRightBtn.centerYAnchor.constraint(equalTo: centerYAnchor),
+            rotateRightBtn.widthAnchor.constraint(equalToConstant: 24),
+            rotateRightBtn.heightAnchor.constraint(equalToConstant: 22),
+
+            rotate180Btn.leadingAnchor.constraint(equalTo: rotateRightBtn.trailingAnchor, constant: 4),
+            rotate180Btn.centerYAnchor.constraint(equalTo: centerYAnchor),
+            rotate180Btn.widthAnchor.constraint(equalToConstant: 40),
+            rotate180Btn.heightAnchor.constraint(equalToConstant: 22),
+
+            flipHBtn.leadingAnchor.constraint(equalTo: rotate180Btn.trailingAnchor, constant: 8),
             flipHBtn.centerYAnchor.constraint(equalTo: centerYAnchor),
             flipHBtn.widthAnchor.constraint(equalToConstant: 24),
             flipHBtn.heightAnchor.constraint(equalToConstant: 22),
@@ -92,6 +110,20 @@ class EditorTopBarView: NSView {
         btn.isBordered = false
         btn.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)?
             .withSymbolConfiguration(.init(pointSize: 13, weight: .medium))
+        btn.contentTintColor = ToolbarLayout.iconColor.withAlphaComponent(0.85)
+        btn.toolTip = tooltip
+        btn.target = self
+        btn.action = action
+        return btn
+    }
+
+    /// Creates a compact text action button for editor commands without an ideal SF Symbol.
+    private func makeTextButton(_ title: String, tooltip: String, action: Selector) -> NSButton {
+        let btn = NSButton()
+        btn.bezelStyle = .recessed
+        btn.isBordered = false
+        btn.title = title
+        btn.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
         btn.contentTintColor = ToolbarLayout.iconColor.withAlphaComponent(0.85)
         btn.toolTip = tooltip
         btn.target = self
@@ -222,6 +254,12 @@ class EditorTopBarView: NSView {
         ov.needsDisplay = true
     }
 
+    /// Rotates the editor image 90 degrees counter-clockwise.
+    @objc private func rotateLeftClicked() { overlayView?.rotateImageCounterClockwise() }
+    /// Rotates the editor image 90 degrees clockwise.
+    @objc private func rotateRightClicked() { overlayView?.rotateImageClockwise() }
+    /// Rotates the editor image 180 degrees.
+    @objc private func rotate180Clicked() { overlayView?.rotateImageUpsideDown() }
     @objc private func flipHClicked() { overlayView?.flipImageHorizontally() }
     @objc private func flipVClicked() { overlayView?.flipImageVertically() }
     @objc private func addCaptureClicked() { overlayView?.overlayDelegate?.overlayViewDidRequestAddCapture() }
