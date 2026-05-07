@@ -14,9 +14,22 @@ class ToolbarStripView: NSView {
     var onClick: ((ToolbarButtonAction) -> Void)?
     var onRightClick: ((ToolbarButtonAction, NSView) -> Void)?
     var onHover: ((ToolbarButtonAction, Bool) -> Void)?
+    var onButtonPressBegan: ((ToolbarButtonAction, ToolbarButtonView, NSEvent) -> Void)?
+    var onButtonPressDragged: ((ToolbarButtonAction, ToolbarButtonView, NSEvent) -> Void)?
+    var onButtonPressEnded: ((ToolbarButtonAction, ToolbarButtonView, NSEvent) -> Void)?
+    var onReorder: (([ToolbarButtonAction]) -> Void)?
+    var isReorderEnabled: Bool = false
+    private(set) var isPerformingReorder: Bool = false
 
     private let padding: CGFloat = 4
     private let spacing: CGFloat = 2
+    private let reorderLongPressDuration: TimeInterval = 0.35
+    private let reorderActivationDistanceSquared: CGFloat = 16
+    private var pendingReorderButtonView: ToolbarButtonView?
+    private var pendingReorderStartPoint: NSPoint = .zero
+    private var reorderTimer: Timer?
+    private var draggedButtonView: ToolbarButtonView?
+    private var draggedButtonOffsetY: CGFloat = 0
 
     init(orientation: Orientation) {
         self.orientation = orientation
@@ -27,6 +40,8 @@ class ToolbarStripView: NSView {
 
     /// Rebuild buttons from ToolbarButton data.
     func setButtons(_ buttons: [ToolbarButton]) {
+        cancelPendingReorder()
+        endReorderIfNeeded(shouldNotify: false)
         for bv in buttonViews { bv.removeFromSuperview() }
         buttonViews.removeAll()
 
@@ -39,6 +54,18 @@ class ToolbarStripView: NSView {
             bv.onClick = { [weak self] action in self?.onClick?(action) }
             bv.onRightClick = { [weak self] action, view in self?.onRightClick?(action, view) }
             bv.onHover = { [weak self] action, hovered in self?.onHover?(action, hovered) }
+            bv.onPressBegan = { [weak self] buttonView, event in
+                self?.handleButtonPressBegan(buttonView, event: event)
+                self?.onButtonPressBegan?(buttonView.action, buttonView, event)
+            }
+            bv.onPressDragged = { [weak self] buttonView, event in
+                self?.handleButtonPressDragged(buttonView, event: event)
+                self?.onButtonPressDragged?(buttonView.action, buttonView, event)
+            }
+            bv.onPressEnded = { [weak self] buttonView, event in
+                self?.handleButtonPressEnded(buttonView, event: event)
+                self?.onButtonPressEnded?(buttonView.action, buttonView, event)
+            }
             addSubview(bv)
             buttonViews.append(bv)
         }
@@ -52,11 +79,19 @@ class ToolbarStripView: NSView {
             buttonViews[i].tintColor = data.tintColor
             buttonViews[i].swatchColor = data.bgColor
             buttonViews[i].sfSymbol = data.sfSymbol
+            buttonViews[i].tooltipText = data.tooltip
+            buttonViews[i].hasContextMenu = data.hasContextMenu
             buttonViews[i].needsDisplay = true
         }
     }
 
-    private func layoutButtons() {
+    /// Returns the current action order represented by the strip.
+    func currentActions() -> [ToolbarButtonAction] {
+        buttonViews.map(\.action)
+    }
+
+    /// Lays out the toolbar buttons and optionally preserves the dragged button position.
+    private func layoutButtons(preserveDraggedButtonPosition: Bool = false) {
         let btnSize = ToolbarButtonView.size
         let count = CGFloat(buttonViews.count)
         guard count > 0 else { frame.size = .zero; return }
@@ -75,6 +110,9 @@ class ToolbarStripView: NSView {
             let h = count * btnSize + max(0, count - 1) * spacing + padding * 2
             frame.size = NSSize(width: w, height: h)
             for (i, bv) in buttonViews.enumerated() {
+                if preserveDraggedButtonPosition && isPerformingReorder && bv === draggedButtonView {
+                    continue
+                }
                 // First button at top
                 bv.frame.origin = NSPoint(x: padding, y: h - padding - btnSize - CGFloat(i) * (btnSize + spacing))
             }
@@ -102,5 +140,142 @@ class ToolbarStripView: NSView {
 
     override func resetCursorRects() {
         addCursorRect(bounds, cursor: .arrow)
+    }
+
+    deinit {
+        reorderTimer?.invalidate()
+    }
+
+    /// Schedules a long-press reorder gesture for vertical right-toolbar buttons.
+    private func handleButtonPressBegan(_ buttonView: ToolbarButtonView, event: NSEvent) {
+        guard shouldEnableReorder else { return }
+
+        // Track the original press point so normal drags can cancel reordering before it begins.
+        pendingReorderButtonView = buttonView
+        pendingReorderStartPoint = convert(event.locationInWindow, from: nil)
+
+        reorderTimer?.invalidate()
+        reorderTimer = Timer.scheduledTimer(withTimeInterval: reorderLongPressDuration, repeats: false) {
+            [weak self, weak buttonView] _ in
+            guard let self, let buttonView else { return }
+            self.beginReorder(for: buttonView)
+        }
+    }
+
+    /// Updates the pending or active reorder gesture while the pointer is moving.
+    private func handleButtonPressDragged(_ buttonView: ToolbarButtonView, event: NSEvent) {
+        if isPerformingReorder, draggedButtonView === buttonView {
+            updateReorder(for: buttonView, event: event)
+            return
+        }
+
+        guard pendingReorderButtonView === buttonView else { return }
+        let currentPoint = convert(event.locationInWindow, from: nil)
+        let dx = currentPoint.x - pendingReorderStartPoint.x
+        let dy = currentPoint.y - pendingReorderStartPoint.y
+
+        // Moving before the hold delay means the user wants the button's normal drag behavior.
+        if dx * dx + dy * dy > reorderActivationDistanceSquared {
+            cancelPendingReorder()
+        }
+    }
+
+    /// Ends the reorder gesture and emits the updated action order when needed.
+    private func handleButtonPressEnded(_ buttonView: ToolbarButtonView, event: NSEvent) {
+        _ = event
+        if isPerformingReorder, draggedButtonView === buttonView {
+            endReorderIfNeeded(shouldNotify: true)
+            return
+        }
+        if pendingReorderButtonView === buttonView {
+            cancelPendingReorder()
+        }
+    }
+
+    /// Returns whether this strip should allow long-press reordering.
+    private var shouldEnableReorder: Bool {
+        orientation == .vertical && isReorderEnabled && buttonViews.count > 1
+    }
+
+    /// Cancels a queued long-press reorder that has not started yet.
+    private func cancelPendingReorder() {
+        reorderTimer?.invalidate()
+        reorderTimer = nil
+        pendingReorderButtonView = nil
+    }
+
+    /// Enters reorder mode and lifts the pressed button above the rest of the strip.
+    private func beginReorder(for buttonView: ToolbarButtonView) {
+        guard shouldEnableReorder, pendingReorderButtonView === buttonView else { return }
+
+        cancelPendingReorder()
+        isPerformingReorder = true
+        draggedButtonView = buttonView
+
+        let buttonPoint = convert(window?.mouseLocationOutsideOfEventStream ?? .zero, from: nil)
+        draggedButtonOffsetY = buttonPoint.y - buttonView.frame.minY
+
+        // Prevent the normal click action from firing when the drag finishes.
+        buttonView.suppressCurrentClick()
+        buttonView.alphaValue = 0.92
+        addSubview(buttonView, positioned: .above, relativeTo: nil)
+    }
+
+    /// Repositions the dragged button and updates the action order based on its current slot.
+    private func updateReorder(for buttonView: ToolbarButtonView, event: NSEvent) {
+        let buttonPoint = convert(event.locationInWindow, from: nil)
+        let minY = padding
+        let maxY = bounds.height - padding - ToolbarButtonView.size
+        let newY = max(minY, min(buttonPoint.y - draggedButtonOffsetY, maxY))
+        buttonView.frame.origin = NSPoint(x: padding, y: newY)
+
+        let destinationIndex = destinationIndexForDraggedButton(buttonView)
+        guard let currentIndex = buttonViews.firstIndex(where: { $0 === buttonView }), destinationIndex != currentIndex else {
+            needsDisplay = true
+            return
+        }
+
+        // Move the dragged button in the logical order so the layout and persisted result match.
+        buttonViews.remove(at: currentIndex)
+        buttonViews.insert(buttonView, at: destinationIndex)
+        layoutButtons(preserveDraggedButtonPosition: true)
+        needsDisplay = true
+    }
+
+    /// Computes the slot index that best matches the dragged button's current vertical center.
+    private func destinationIndexForDraggedButton(_ buttonView: ToolbarButtonView) -> Int {
+        let centerY = buttonView.frame.midY
+        for index in 0..<buttonViews.count {
+            let slotCenterY = slotCenterY(for: index)
+            if centerY >= slotCenterY {
+                return index
+            }
+        }
+        return max(0, buttonViews.count - 1)
+    }
+
+    /// Returns the visual center Y of a button slot for the given index.
+    private func slotCenterY(for index: Int) -> CGFloat {
+        let step = ToolbarButtonView.size + spacing
+        let originY = bounds.height - padding - ToolbarButtonView.size - CGFloat(index) * step
+        return originY + ToolbarButtonView.size / 2
+    }
+
+    /// Finishes reorder mode, snaps buttons into place, and optionally publishes the new order.
+    private func endReorderIfNeeded(shouldNotify: Bool) {
+        cancelPendingReorder()
+        guard isPerformingReorder, let draggedButtonView else { return }
+
+        isPerformingReorder = false
+        self.draggedButtonView = nil
+        self.draggedButtonOffsetY = 0
+        draggedButtonView.alphaValue = 1.0
+        layoutButtons()
+        needsDisplay = true
+
+        // Only persist real reorder completions so view rebuilds do not spam UserDefaults.
+        if shouldNotify {
+            onReorder?(currentActions())
+        }
     }
 }

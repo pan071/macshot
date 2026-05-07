@@ -7,7 +7,7 @@ extension Notification.Name {
 // Toolbar buttons drawn directly in the OverlayView (not a separate window).
 // This avoids window-level z-order issues and matches Flameshot's look.
 
-enum ToolbarButtonAction {
+enum ToolbarButtonAction: Equatable {
     case tool(AnnotationTool)
     case color
     case sizeDisplay
@@ -55,6 +55,9 @@ struct ToolbarButton {
 }
 
 class ToolbarLayout {
+
+    /// UserDefaults key for persisting the custom right toolbar order.
+    private static let rightToolbarOrderKey = "rightToolbarActionOrder"
 
     // Default theme colors (Flameshot purple style)
     static let defaultAccentColor = NSColor(calibratedRed: 0.55, green: 0.30, blue: 0.85, alpha: 1.0)
@@ -429,6 +432,97 @@ class ToolbarLayout {
             buttons.append(recordBtn)
         }
 
-        return buttons
+        return applyPersistedRightToolbarOrder(
+            to: buttons,
+            isRecording: isRecording,
+            isEditorMode: isEditorMode
+        )
+    }
+
+    /// Returns a stable identifier for a right-toolbar action so the order can be persisted.
+    static func persistentIdentifier(forRightToolbarAction action: ToolbarButtonAction) -> String? {
+        switch action {
+        case .cancel:
+            return "cancel"
+        case .moveSelection:
+            return "moveSelection"
+        case .detach:
+            return "detach"
+        case .copy:
+            return "copy"
+        case .save:
+            return "save"
+        case .share:
+            return "share"
+        case .upload:
+            return "upload"
+        case .pin:
+            return "pin"
+        case .ocr:
+            return "ocr"
+        case .translate:
+            return "translate"
+        case .scrollCapture:
+            return "scrollCapture"
+        case .record:
+            return "record"
+        default:
+            return nil
+        }
+    }
+
+    /// Persists the current right-toolbar order for normal screenshot mode.
+    static func saveRightToolbarOrder(_ actions: [ToolbarButtonAction]) {
+        // Only persist known right-toolbar actions so invalid data never enters UserDefaults.
+        let identifiers = actions.compactMap { persistentIdentifier(forRightToolbarAction: $0) }
+        guard !identifiers.isEmpty else { return }
+        UserDefaults.standard.set(identifiers, forKey: rightToolbarOrderKey)
+    }
+
+    /// Applies the persisted right-toolbar order when the normal screenshot toolbar is shown.
+    static func applyPersistedRightToolbarOrder(
+        to buttons: [ToolbarButton],
+        isRecording: Bool = false,
+        isEditorMode: Bool = false
+    ) -> [ToolbarButton] {
+        // Only the normal screenshot toolbar participates in custom ordering.
+        guard !isRecording && !isEditorMode else { return buttons }
+        let storedOrder = UserDefaults.standard.stringArray(forKey: rightToolbarOrderKey) ?? []
+        return reorderRightToolbarButtons(buttons, using: storedOrder)
+    }
+
+    /// Reorders right-toolbar buttons by identifier while keeping unknown or new buttons appended.
+    static func reorderRightToolbarButtons(_ buttons: [ToolbarButton], using identifiers: [String]) -> [ToolbarButton] {
+        guard !buttons.isEmpty, !identifiers.isEmpty else { return buttons }
+
+        var buttonsByIdentifier: [String: ToolbarButton] = [:]
+        var orderedButtons: [ToolbarButton] = []
+        var usedIdentifiers = Set<String>()
+
+        // Build a lookup table using the default button set so persisted order can be replayed safely.
+        for button in buttons {
+            guard let identifier = persistentIdentifier(forRightToolbarAction: button.action) else { continue }
+            buttonsByIdentifier[identifier] = button
+        }
+
+        // Apply the saved order first.
+        for identifier in identifiers {
+            guard let button = buttonsByIdentifier[identifier], !usedIdentifiers.contains(identifier) else { continue }
+            orderedButtons.append(button)
+            usedIdentifiers.insert(identifier)
+        }
+
+        // Append any new or unmapped buttons using the current default order.
+        for button in buttons {
+            guard let identifier = persistentIdentifier(forRightToolbarAction: button.action) else {
+                orderedButtons.append(button)
+                continue
+            }
+            guard !usedIdentifiers.contains(identifier) else { continue }
+            orderedButtons.append(button)
+            usedIdentifiers.insert(identifier)
+        }
+
+        return orderedButtons
     }
 }
