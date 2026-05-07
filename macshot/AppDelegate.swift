@@ -2257,21 +2257,78 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     }
 
     @objc private func openImageFromClipboard() {
+        guard let image = clipboardImageOrShowAlert() else { return }
+        DetachedEditorWindowController.open(image: image)
+    }
+
+    /// Reads an image from the clipboard and shows the standard alert when no valid image is available.
+    private func clipboardImageOrShowAlert() -> NSImage? {
+        // Read the current pasteboard snapshot exactly once for the editor-open path.
         let pasteboard = NSPasteboard.general
+        // Prefer actual image files copied from Finder so we pin the real bitmap instead of the Finder file icon preview.
+        if let image = clipboardImageFromFileURL(in: pasteboard) {
+            return image
+        }
+
+        // Fall back to raw image data already placed on the clipboard by browsers, preview apps, or macshot itself.
         guard let image = NSImage(pasteboard: pasteboard), image.isValid,
               image.size.width > 0, image.size.height > 0 else {
+            // Keep the existing user-facing alert copy so the new shortcut behaves consistently with "Open from Clipboard".
             let alert = NSAlert()
             alert.messageText = L("No Image on Clipboard")
             alert.informativeText = L("Copy an image to the clipboard first, then try again.")
             alert.alertStyle = .informational
             alert.addButton(withTitle: L("OK"))
             alert.runModal()
-            return
+            return nil
         }
-        DetachedEditorWindowController.open(image: image)
+        return image
+    }
+
+    /// Loads the first real image file referenced by the clipboard, if the current pasteboard payload came from Finder.
+    private func clipboardImageFromFileURL(in pasteboard: NSPasteboard) -> NSImage? {
+        // Ask AppKit for file URLs only so text URLs or web links are ignored.
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [
+            .urlReadingFileURLsOnly: true,
+        ]
+        guard let fileURLs = pasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL] else {
+            return nil
+        }
+
+        // Use the first clipboard file that is actually an image and can be decoded into an NSImage.
+        for fileURL in fileURLs {
+            // Skip non-image files because Finder can copy arbitrary documents to the clipboard.
+            guard isImageFileURL(fileURL) else { continue }
+            // Decode the file from disk so the result is the original image pixels rather than Finder's icon preview.
+            if let image = loadImage(from: fileURL) {
+                return image
+            }
+        }
+        return nil
+    }
+
+    /// Determines whether the provided file URL points to an image format that macshot can open.
+    private func isImageFileURL(_ fileURL: URL) -> Bool {
+        // Keep WebP as an explicit special case because its decoding is handled by the bundled WebP decoder.
+        let pathExtension = fileURL.pathExtension.lowercased()
+        if pathExtension == "webp" {
+            return true
+        }
+
+        // Use UniformTypeIdentifiers for every other file extension so Finder-copied image files are recognized reliably.
+        guard let type = UTType(filenameExtension: pathExtension) else {
+            return false
+        }
+        return type.conforms(to: .image)
     }
 
     @objc private func pinFromClipboard() {
+        // Prefer real image files copied from Finder so the pin shows the original bitmap instead of the file icon.
+        if let image = clipboardImageFromFileURL(in: NSPasteboard.general) {
+            showPin(image: image)
+            return
+        }
+
         guard let item = NSPasteboard.general.pasteboardItems?.first else {
             showNoPinClipboardContentAlert()
             return
@@ -2312,14 +2369,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     }
 
     private func openImageFile(url: URL) {
-        let image: NSImage
-        if url.pathExtension.lowercased() == "webp",
-           let data = try? Data(contentsOf: url),
-           let decoded = try? WebPDecoder().decode(toNSImage: data, options: WebPDecoderOptions()) {
-            image = decoded
-        } else if let loaded = NSImage(contentsOf: url) {
-            image = loaded
-        } else {
+        // Reuse the shared decoder path so Finder clipboard files and manual "Open Image..." behave identically.
+        guard let image = loadImage(from: url) else {
             return
         }
         DetachedEditorWindowController.open(image: image)
@@ -2356,6 +2407,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         } catch {
             showFailureToast(error.localizedDescription)
         }
+    }
+
+    /// Decodes an image file from disk using the same rules as the editor and clipboard import paths.
+    private func loadImage(from url: URL) -> NSImage? {
+        // Decode WebP with the dedicated decoder because NSImage cannot reliably open it on all supported macOS versions.
+        if url.pathExtension.lowercased() == "webp",
+           let data = try? Data(contentsOf: url),
+           let decoded = try? WebPDecoder().decode(toNSImage: data, options: WebPDecoderOptions()) {
+            return decoded
+        }
+
+        // Let AppKit load every other supported image type directly from disk.
+        return NSImage(contentsOf: url)
     }
 
     // MARK: - Open Video
@@ -2455,6 +2519,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         case "settings":            openSettings()
         case "stop-recording":      stopRecording()
         case "capture-last":        captureLastArea()
+        case "pin-from-clipboard":  pinFromClipboard()
         case "open":
             if let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
                let path = components.queryItems?.first(where: { $0.name == "file" })?.value {

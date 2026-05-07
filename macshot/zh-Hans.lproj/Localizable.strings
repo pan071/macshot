@@ -631,6 +631,7 @@
 "Filename Template Tokens" = "文件名模板标记";
 "Filename tokens" = "文件名标记";
 "Filename:" = "文件名:";
+"Pin the current clipboard image or text to the screen" = "将当前剪贴板中的图片或文本固定到屏幕";
 "Open an image file in the editor" = "在编辑器中打开图片文件";
 "Open the recent captures overlay" = "打开最近捕获覆盖层";
 "Open this settings window" = "打开此设置窗口";
