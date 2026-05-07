@@ -190,6 +190,7 @@
 "Launch at login" = "登入時啟動";
 "Show snap alignment guides" = "顯示對齊輔助線";
 "Capture mouse cursor in screenshot" = "在螢幕截圖中擷取滑鼠游標";
+"Double-click a pinned image to close it" = "雙擊固定圖片時關閉";
 "Use window title in saved filename" = "在儲存的檔案名稱中使用視窗標題";
 "Hide menu bar icon" = "隱藏選單列圖像";
 "Hotkeys still work. To show the icon again, re-launch macshot." = "快捷鍵仍可使用。若要再次顯示圖像，請重新啟動 macshot。";

@@ -179,6 +179,9 @@ private class PinPanel: NSPanel {
 
 private class PinView: NSView {
 
+    /// UserDefaults key for the optional double-click-to-close behavior on pinned screenshots.
+    private static let doubleClickCloseDefaultsKey = "pinCloseOnDoubleClick"
+
     var onClose: (() -> Void)?
     var onEdit: (() -> Void)?
     var onZoom: ((CGFloat, NSPoint) -> Void)?
@@ -353,7 +356,23 @@ private class PinView: NSView {
             onResetZoom?()
             return
         }
+
+        if shouldCloseOnDoubleClick(for: event) {
+            onClose?()
+            return
+        }
+
         super.mouseDown(with: event)
+    }
+
+    /// Returns true when the current event should close the pin because the user enabled background double-click dismissal.
+    private func shouldCloseOnDoubleClick(for event: NSEvent) -> Bool {
+        // Ignore single clicks so normal dragging and focus behavior remain unchanged.
+        guard event.clickCount >= 2 else { return false }
+
+        // Respect the capture preference so the gesture is opt-in and defaults to disabled.
+        let isEnabled = UserDefaults.standard.object(forKey: Self.doubleClickCloseDefaultsKey) as? Bool ?? false
+        return isEnabled
     }
 
     // Scroll to zoom (mouse wheel and trackpad two-finger scroll)
