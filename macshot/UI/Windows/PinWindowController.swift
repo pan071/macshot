@@ -50,7 +50,8 @@ class PinWindowController {
         panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.hidesOnDeactivate = false
-        panel.isMovableByWindowBackground = true
+        // Use PinView's custom drag handling so long pinned images can move beyond the screen edges consistently.
+        panel.isMovableByWindowBackground = false
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.contentAspectRatio = size
@@ -198,6 +199,8 @@ private class PinView: NSView {
     private var zoomLabel: NSTextField?
     private var trackingArea: NSTrackingArea?
     private var isHovering = false
+    private var dragStartMouseScreenPoint: NSPoint?
+    private var dragStartWindowOrigin: NSPoint?
 
     var zoomPercent: Int = 100 {
         didSet {
@@ -354,7 +357,41 @@ private class PinView: NSView {
             return
         }
 
-        super.mouseDown(with: event)
+        // Capture the initial drag anchor so pinned images can be repositioned even when AppKit's background dragging would clamp them.
+        dragStartMouseScreenPoint = screenPoint(for: event)
+        dragStartWindowOrigin = window?.frame.origin
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let window = window,
+              let dragStartMouseScreenPoint = dragStartMouseScreenPoint,
+              let dragStartWindowOrigin = dragStartWindowOrigin else {
+            return
+        }
+
+        let currentScreenPoint = screenPoint(for: event)
+        // Move the entire pin window by the mouse delta so tall images can travel past the screen edges.
+        let newOrigin = NSPoint(
+            x: dragStartWindowOrigin.x + (currentScreenPoint.x - dragStartMouseScreenPoint.x),
+            y: dragStartWindowOrigin.y + (currentScreenPoint.y - dragStartMouseScreenPoint.y)
+        )
+        window.setFrameOrigin(newOrigin)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        // Clear the drag anchors when the gesture ends so the next click starts a fresh drag session.
+        dragStartMouseScreenPoint = nil
+        dragStartWindowOrigin = nil
+    }
+
+    /// Converts the current mouse event into a screen-space point for custom pin dragging.
+    private func screenPoint(for event: NSEvent) -> NSPoint {
+        guard let window = window else { return .zero }
+        let pointInWindow = event.locationInWindow
+        return NSPoint(
+            x: window.frame.origin.x + pointInWindow.x,
+            y: window.frame.origin.y + pointInWindow.y
+        )
     }
 
     /// Returns true when the current event should close the pin because the user enabled background double-click dismissal.
