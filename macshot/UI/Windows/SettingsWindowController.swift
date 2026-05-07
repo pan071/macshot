@@ -83,6 +83,7 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
     private var thumbnailStackingPopup: NSPopUpButton!
     private var thumbnailCornerPopup: NSPopUpButton!
     private var thumbnailLetterboxCheckbox: NSButton!
+    private var thumbnailScaleSlider: NSSlider!
     private var historyUnlimitedCheckbox: NSButton!
     private var historyOrderByLastEditCheckbox: NSButton!
     private var thumbnailScaleLabel: NSTextField!
@@ -868,14 +869,19 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
         stack.addArrangedSubview(indented(labeledRow(L("  Position:"), controls: [thumbnailCornerPopup!])))
         stack.setCustomSpacing(8, after: stack.arrangedSubviews.last!)
 
-        let sizeSlider = NSSlider(value: UserDefaults.standard.object(forKey: "thumbnailScale") as? Double ?? 1.0,
-                                   minValue: 0.5, maxValue: 2.0, target: self, action: #selector(thumbnailScaleChanged(_:)))
-        sizeSlider.controlSize = .small
-        sizeSlider.widthAnchor.constraint(equalToConstant: 120).isActive = true
-        thumbnailScaleLabel = NSTextField(labelWithString: scalePercentString(sizeSlider.doubleValue))
+        thumbnailScaleSlider = NSSlider(
+            value: UserDefaults.standard.object(forKey: "thumbnailScale") as? Double ?? 1.0,
+            minValue: 0.5,
+            maxValue: 2.0,
+            target: self,
+            action: #selector(thumbnailScaleChanged(_:))
+        )
+        thumbnailScaleSlider.controlSize = .small
+        thumbnailScaleSlider.widthAnchor.constraint(equalToConstant: 120).isActive = true
+        thumbnailScaleLabel = NSTextField(labelWithString: scalePercentString(thumbnailScaleSlider.doubleValue))
         thumbnailScaleLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         thumbnailScaleLabel.textColor = .secondaryLabelColor
-        stack.addArrangedSubview(indented(labeledRow(L("  Preview size:"), controls: [sizeSlider, thumbnailScaleLabel])))
+        stack.addArrangedSubview(indented(labeledRow(L("  Preview size:"), controls: [thumbnailScaleSlider, thumbnailScaleLabel])))
         stack.setCustomSpacing(8, after: stack.arrangedSubviews.last!)
 
         thumbnailLetterboxCheckbox = NSButton(
@@ -913,6 +919,9 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
 
         stack.addArrangedSubview(indented(pinDoubleClickCloseCheckbox))
         stack.setCustomSpacing(20, after: stack.arrangedSubviews.last!)
+
+        // Keep thumbnail sub-settings visually aligned with the master toggle.
+        updateThumbnailControlsEnabled()
 
         // ── Output ───────────────────────────────────────────
         stack.addArrangedSubview(sectionHeader(L("Output")))
@@ -2657,7 +2666,7 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
         let rememberTool = UserDefaults.standard.object(forKey: "rememberLastTool") as? Bool ?? true
         rememberToolCheckbox.state = rememberTool ? .on : .off
 
-        let thumbnail = UserDefaults.standard.object(forKey: "showFloatingThumbnail") as? Bool ?? true
+        let thumbnail = UserDefaults.standard.object(forKey: "showFloatingThumbnail") as? Bool ?? false
         thumbnailCheckbox.state = thumbnail ? .on : .off
         thumbnailLetterboxCheckbox.state = UserDefaults.standard.bool(forKey: "thumbnailLetterbox") ? .on : .off
 
@@ -2667,6 +2676,9 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
 
         let stacking = UserDefaults.standard.object(forKey: "thumbnailStacking") as? Bool ?? true
         thumbnailStackingPopup.selectItem(at: stacking ? 0 : 1)
+        thumbnailScaleSlider.doubleValue = UserDefaults.standard.object(forKey: "thumbnailScale") as? Double ?? 1.0
+        thumbnailScaleLabel.stringValue = scalePercentString(thumbnailScaleSlider.doubleValue)
+        updateThumbnailControlsEnabled()
 
         let thumbnailCorner = UserDefaults.standard.string(forKey: "thumbnailCorner") ?? "bottomRight"
         switch thumbnailCorner {
@@ -2862,6 +2874,8 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
     }
     @objc private func thumbnailChanged(_ sender: NSButton) {
         UserDefaults.standard.set(sender.state == .on, forKey: "showFloatingThumbnail")
+        // Mirror the runtime state in the settings UI so dependent controls are only interactive when relevant.
+        updateThumbnailControlsEnabled()
     }
     @objc private func thumbnailAutoDismissChanged(_ sender: NSStepper) {
         thumbnailAutoDismissField.integerValue = sender.integerValue
@@ -2877,6 +2891,18 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
 
     private func scalePercentString(_ scale: Double) -> String {
         "\(Int(round(scale * 100)))%"
+    }
+
+    /// Updates the enabled state of the floating-thumbnail sub-settings based on the master toggle.
+    private func updateThumbnailControlsEnabled() {
+        let isEnabled = thumbnailCheckbox?.state == .on
+        thumbnailAutoDismissField?.isEnabled = isEnabled
+        thumbnailAutoDismissStepper?.isEnabled = isEnabled
+        thumbnailStackingPopup?.isEnabled = isEnabled
+        thumbnailCornerPopup?.isEnabled = isEnabled
+        thumbnailLetterboxCheckbox?.isEnabled = isEnabled
+        thumbnailScaleSlider?.isEnabled = isEnabled
+        thumbnailScaleLabel?.textColor = isEnabled ? .secondaryLabelColor : .disabledControlTextColor
     }
 
     @objc private func thumbnailStackingChanged(_ sender: NSPopUpButton) {

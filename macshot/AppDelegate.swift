@@ -1872,7 +1872,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     }
 
     func showFloatingThumbnail(image: NSImage, annotationData: CaptureAnnotationData? = nil, historyEntryID: String? = nil) {
-        let enabled = UserDefaults.standard.object(forKey: "showFloatingThumbnail") as? Bool ?? true
+        let enabled = UserDefaults.standard.object(forKey: "showFloatingThumbnail") as? Bool ?? false
         guard enabled else { return }
 
         let stacking = UserDefaults.standard.object(forKey: "thumbnailStacking") as? Bool ?? true
