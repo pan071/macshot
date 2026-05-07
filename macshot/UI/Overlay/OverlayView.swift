@@ -1519,6 +1519,11 @@ class OverlayView: NSView {
         chromeParentView?.subviews.compactMap { $0 as? EditorTopBarView }.first
     }
 
+    /// Refreshes the editor chrome after an image transform changes the underlying bitmap dimensions.
+    private func updateTopBarImageSize(width: Int, height: Int) {
+        findTopBar()?.updateSizeLabel(width: width, height: height)
+    }
+
     func updateCursorForCurrentTool() {
         guard let win = window else { return }
         let point = convert(win.mouseLocationOutsideOfEventStream, from: nil)
@@ -3598,6 +3603,36 @@ class OverlayView: NSView {
 
     // MARK: - Editor Image Transforms
 
+    /// Supported quarter/half-turn image rotations for editor transforms.
+    private enum ImageRotationDirection {
+        case clockwise
+        case counterClockwise
+        case upsideDown
+
+        /// Rotation angle in radians, used for annotations that carry their own bitmap orientation.
+        var radians: CGFloat {
+            switch self {
+            case .clockwise:
+                return -.pi / 2
+            case .counterClockwise:
+                return .pi / 2
+            case .upsideDown:
+                return .pi
+            }
+        }
+
+        /// Whether the rotation swaps width and height.
+        var swapsDimensions: Bool {
+            switch self {
+            case .clockwise, .counterClockwise:
+                return true
+            case .upsideDown:
+                return false
+            }
+        }
+    }
+
+    /// Flips the editor image horizontally and mirrors annotation geometry to match the new pixels.
     func flipImageHorizontally() {
         guard let original = screenshotImage,
             let cgImage = original.cgImage(forProposedRect: nil, context: nil, hints: nil)
@@ -3648,6 +3683,7 @@ class OverlayView: NSView {
         needsDisplay = true
     }
 
+    /// Flips the editor image vertically and mirrors annotation geometry to match the new pixels.
     func flipImageVertically() {
         guard let original = screenshotImage,
             let cgImage = original.cgImage(forProposedRect: nil, context: nil, hints: nil)
@@ -3692,6 +3728,200 @@ class OverlayView: NSView {
 
         cachedCompositedImage = nil
         needsDisplay = true
+    }
+
+    /// Rotates the editor image 90 degrees clockwise, carrying annotations along with it.
+    func rotateImageClockwise() {
+        rotateImage(.clockwise)
+    }
+
+    /// Rotates the editor image 90 degrees counter-clockwise, carrying annotations along with it.
+    func rotateImageCounterClockwise() {
+        rotateImage(.counterClockwise)
+    }
+
+    /// Rotates the editor image 180 degrees, carrying annotations along with it.
+    func rotateImageUpsideDown() {
+        rotateImage(.upsideDown)
+    }
+
+    /// Applies an editor image rotation and updates annotation geometry to stay visually aligned.
+    private func rotateImage(_ direction: ImageRotationDirection) {
+        guard let original = screenshotImage,
+              let cgImage = original.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+
+        // Save the pre-rotation image so Undo can restore the previous bitmap state.
+        let prevImage = original.copy() as! NSImage
+        undoStack.append(.imageTransform(previousImage: prevImage, annotationOffsets: []))
+        redoStack.removeAll()
+
+        let sourceWidth = cgImage.width
+        let sourceHeight = cgImage.height
+        let targetPixelWidth = direction.swapsDimensions ? sourceHeight : sourceWidth
+        let targetPixelHeight = direction.swapsDimensions ? sourceWidth : sourceHeight
+        let targetPointSize = direction.swapsDimensions
+            ? NSSize(width: original.size.height, height: original.size.width)
+            : original.size
+
+        let colorSpace = cgImage.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!
+        let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        guard let ctx = CGContext(
+            data: nil,
+            width: targetPixelWidth,
+            height: targetPixelHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
+        ) else { return }
+
+        // Rotate the bitmap in Core Graphics space so the result stays crisp and color-correct.
+        switch direction {
+        case .clockwise:
+            ctx.translateBy(x: CGFloat(targetPixelWidth), y: 0)
+            ctx.rotate(by: .pi / 2)
+        case .counterClockwise:
+            ctx.translateBy(x: 0, y: CGFloat(targetPixelHeight))
+            ctx.rotate(by: -.pi / 2)
+        case .upsideDown:
+            ctx.translateBy(x: CGFloat(targetPixelWidth), y: CGFloat(targetPixelHeight))
+            ctx.rotate(by: .pi)
+        }
+        ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: sourceWidth, height: sourceHeight))
+        guard let rotatedImage = ctx.makeImage() else { return }
+
+        let oldRect = selectionRect
+        let newRect: NSRect
+        if isEditorMode {
+            newRect = NSRect(origin: .zero, size: targetPointSize)
+        } else {
+            newRect = NSRect(origin: oldRect.origin, size: targetPointSize)
+        }
+
+        screenshotImage = NSImage(cgImage: rotatedImage, size: targetPointSize)
+        transformAnnotationsForRotation(from: oldRect, to: newRect, direction: direction)
+
+        if isEditorMode {
+            // Editor mode image transforms redefine the canvas size to match the rotated bitmap.
+            selectionRect = newRect
+            if isInsideScrollView {
+                frame.size = targetPointSize
+            }
+            updateTopBarImageSize(width: targetPixelWidth, height: targetPixelHeight)
+        }
+
+        cachedCompositedImage = nil
+        cachedAnnotationLayer = nil
+        cachedAnnotationLayerExcludingSelected = nil
+        needsDisplay = true
+    }
+
+    /// Rotates all annotation geometry from the old canvas rect into the new rotated canvas rect.
+    private func transformAnnotationsForRotation(from oldRect: NSRect, to newRect: NSRect, direction: ImageRotationDirection) {
+        for ann in annotations {
+            ann.startPoint = rotatedPoint(ann.startPoint, from: oldRect, to: newRect, direction: direction)
+            ann.endPoint = rotatedPoint(ann.endPoint, from: oldRect, to: newRect, direction: direction)
+
+            if let controlPoint = ann.controlPoint {
+                ann.controlPoint = rotatedPoint(controlPoint, from: oldRect, to: newRect, direction: direction)
+            }
+
+            if let points = ann.points {
+                ann.points = points.map { rotatedPoint($0, from: oldRect, to: newRect, direction: direction) }
+            }
+
+            if let anchors = ann.anchorPoints {
+                ann.anchorPoints = anchors.map { rotatedPoint($0, from: oldRect, to: newRect, direction: direction) }
+            }
+
+            if ann.textDrawRect != .zero {
+                ann.textDrawRect = rotatedRect(ann.textDrawRect, from: oldRect, to: newRect, direction: direction)
+                ann.startPoint = ann.textDrawRect.origin
+                ann.endPoint = NSPoint(x: ann.textDrawRect.maxX, y: ann.textDrawRect.maxY)
+            } else if annotationUsesBoundingRectRotation(ann) {
+                let rotatedBounds = rotatedRect(ann.boundingRect, from: oldRect, to: newRect, direction: direction)
+                ann.startPoint = rotatedBounds.origin
+                ann.endPoint = NSPoint(x: rotatedBounds.maxX, y: rotatedBounds.maxY)
+            }
+
+            if ann.tool == .text || ann.tool == .stamp {
+                // Preserve the visual orientation of bitmap-backed annotations as the underlying image rotates.
+                ann.rotation = normalizedAnnotationRotation(ann.rotation + direction.radians)
+            }
+
+            if ann.tool == .loupe || ann.tool == .pixelate || ann.tool == .blur {
+                // Re-bake region-dependent annotations against the rotated source image on the next draw pass.
+                ann.bakedBlurNSImage = nil
+                ann.sourceImage = screenshotImage
+                ann.sourceImageBounds = newRect
+            }
+
+            ann.outlineGlowImage = nil
+            ann.outlineGlowRect = .zero
+        }
+    }
+
+    /// Returns whether this annotation should be remapped by bounding rect instead of raw start/end endpoints.
+    private func annotationUsesBoundingRectRotation(_ annotation: Annotation) -> Bool {
+        switch annotation.tool {
+        case .rectangle, .filledRectangle, .ellipse, .stamp, .pixelate, .blur, .loupe:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Rotates a single canvas point from the old image rect into the new rotated image rect.
+    private func rotatedPoint(_ point: NSPoint, from oldRect: NSRect, to newRect: NSRect, direction: ImageRotationDirection) -> NSPoint {
+        let localX = point.x - oldRect.minX
+        let localY = point.y - oldRect.minY
+
+        switch direction {
+        case .clockwise:
+            return NSPoint(
+                x: newRect.minX + oldRect.height - localY,
+                y: newRect.minY + localX
+            )
+        case .counterClockwise:
+            return NSPoint(
+                x: newRect.minX + localY,
+                y: newRect.minY + oldRect.width - localX
+            )
+        case .upsideDown:
+            return NSPoint(
+                x: newRect.minX + oldRect.width - localX,
+                y: newRect.minY + oldRect.height - localY
+            )
+        }
+    }
+
+    /// Rotates a rect by mapping all four corners, then rebuilding the axis-aligned box that contains them.
+    private func rotatedRect(_ rect: NSRect, from oldRect: NSRect, to newRect: NSRect, direction: ImageRotationDirection) -> NSRect {
+        let corners = [
+            NSPoint(x: rect.minX, y: rect.minY),
+            NSPoint(x: rect.maxX, y: rect.minY),
+            NSPoint(x: rect.minX, y: rect.maxY),
+            NSPoint(x: rect.maxX, y: rect.maxY),
+        ].map { rotatedPoint($0, from: oldRect, to: newRect, direction: direction) }
+
+        let xs = corners.map(\.x)
+        let ys = corners.map(\.y)
+        let minX = xs.min() ?? newRect.minX
+        let maxX = xs.max() ?? newRect.minX
+        let minY = ys.min() ?? newRect.minY
+        let maxY = ys.max() ?? newRect.minY
+        return NSRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
+    /// Normalizes annotation rotation so repeated image transforms do not accumulate unbounded angle values.
+    private func normalizedAnnotationRotation(_ angle: CGFloat) -> CGFloat {
+        var normalized = angle.truncatingRemainder(dividingBy: .pi * 2)
+        if normalized <= -.pi {
+            normalized += .pi * 2
+        } else if normalized > .pi {
+            normalized -= .pi * 2
+        }
+        return normalized
     }
 
     /// Add a captured image as a draggable stamp annotation, placed below the current canvas.
