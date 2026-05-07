@@ -30,6 +30,7 @@
 "Show History Panel" = "顯示歷史記錄面板";
 "Open Image..." = "開啟影像⋯";
 "Open from Clipboard" = "從剪貼簿開啟";
+"Pin from Clipboard" = "貼圖";
 "Preferences..." = "偏好設定⋯";
 "Check for Updates..." = "檢查更新⋯";
 "Quit macshot" = "結束 macshot";
@@ -541,6 +542,7 @@
 "Filename:" = "檔案名稱：";
 "Open an image file in the editor" = "在編輯器中開啟影像檔案";
 "Open the recent captures overlay" = "開啟最近擷取的覆蓋層";
+"Pin the current clipboard image to the screen" = "將目前剪貼簿影像貼到螢幕上";
 "Open this settings window" = "開啟此設定視窗";
 "Quick capture (uses your Enter action)" = "快速擷取（使用您的 Enter 動作）";
 "Re-capture the last selected area" = "重新擷取上次選取的區域";

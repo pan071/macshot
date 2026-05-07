@@ -143,6 +143,28 @@ class PinWindowController {
 private class PinPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 
+    /// Relaxes AppKit's drag constraint so pinned images can move beyond screen edges while staying recoverable.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        guard let screen = screen else { return frameRect }
+
+        // Keep a small draggable strip visible so the user can always pull the pin back on screen.
+        let minVisibleWidth = min(frameRect.width, 80)
+        let minVisibleHeight = min(frameRect.height, 80)
+        let visibleFrame = screen.visibleFrame
+
+        // Allow the window to overflow every edge as long as the minimum visible strip remains accessible.
+        let minX = visibleFrame.minX - frameRect.width + minVisibleWidth
+        let maxX = visibleFrame.maxX - minVisibleWidth
+        let minY = visibleFrame.minY - frameRect.height + minVisibleHeight
+        let maxY = visibleFrame.maxY - minVisibleHeight
+
+        let constrainedOrigin = NSPoint(
+            x: min(max(frameRect.origin.x, minX), maxX),
+            y: min(max(frameRect.origin.y, minY), maxY)
+        )
+        return NSRect(origin: constrainedOrigin, size: frameRect.size)
+    }
+
     // Don't let Cmd+Q propagate to the app — just close the pin
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.modifierFlags.contains(.command) && event.keyCode == 12 {  // Q

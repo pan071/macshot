@@ -33,6 +33,21 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
         TabDef(id: "about",     label: "About",     symbolName: "info.circle",               legacyImageName: NSImage.preferencesGeneralName),
     ]
 
+    /// Explicit display order for global shortcuts so newly added actions appear in a predictable place in Settings.
+    private static let hotkeyDisplayOrder: [HotkeyManager.HotkeySlot] = [
+        .captureArea,
+        .captureFullScreen,
+        .recordArea,
+        .recordScreen,
+        .historyOverlay,
+        .captureOCR,
+        .quickCapture,
+        .scrollCapture,
+        .openFromClipboard,
+        .pinFromClipboard,
+        .captureLastArea,
+    ]
+
     private var tabContentContainer: NSView!
     private var tabContentViews: [String: NSView] = [:]
     private var currentTabID: String = "general"
@@ -752,7 +767,7 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
         stack.addArrangedSubview(sectionHeader(L("Keyboard Shortcuts")))
         stack.setCustomSpacing(10, after: stack.arrangedSubviews.last!)
 
-        for slot in HotkeyManager.HotkeySlot.allCases {
+        for slot in Self.hotkeyDisplayOrder {
             let field = NSTextField()
             field.isEditable = false
             field.isSelectable = false
@@ -2455,6 +2470,7 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
             ("macshot://scroll-capture",      L("Start scroll capture")),
             ("macshot://history",             L("Open the recent captures overlay")),
             ("macshot://settings",            L("Open this settings window")),
+            ("macshot://pin-from-clipboard",  L("Pin the current clipboard image to the screen")),
             ("macshot://open?file=/path.png", L("Open an image file in the editor")),
         ]
 

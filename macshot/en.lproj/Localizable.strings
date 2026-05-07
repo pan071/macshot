@@ -29,6 +29,7 @@
 "Show History Panel" = "Show History Panel";
 "Open Image..." = "Open Image...";
 "Open from Clipboard" = "Open from Clipboard";
+"Pin from Clipboard" = "Pin from Clipboard";
 "Settings..." = "Settings...";
 "Check for Updates..." = "Check for Updates...";
 "Quit macshot" = "Quit macshot";
@@ -542,6 +543,7 @@
 "Filename:" = "Filename:";
 "Open an image file in the editor" = "Open an image file in the editor";
 "Open the recent captures overlay" = "Open the recent captures overlay";
+"Pin the current clipboard image to the screen" = "Pin the current clipboard image to the screen";
 "Open this settings window" = "Open this settings window";
 "Quick capture (uses your Enter action)" = "Quick capture (uses your Enter action)";
 "Re-capture the last selected area" = "Re-capture the last selected area";
