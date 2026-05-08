@@ -826,6 +826,7 @@ class OverlayView: NSView {
         scrollCaptureStripCount = 0
         scrollCapturePixelSize = .zero
         scrollCaptureAutoScrolling = false
+        showToolbars = false
 
         activateAppUnderSelection()
         window?.ignoresMouseEvents = true
@@ -924,6 +925,11 @@ class OverlayView: NSView {
         if let win = window {
             scrollCaptureHUDPanel?.position(relativeTo: selectionRect, in: win)
         }
+    }
+
+    /// Returns the scroll capture HUD frame in screen coordinates for preview-panel avoidance.
+    func scrollCaptureHUDFrameInScreen() -> NSRect? {
+        scrollCaptureHUDPanel?.frame
     }
 
     // Capture-target snapping. Preserve the old Boolean preference as a

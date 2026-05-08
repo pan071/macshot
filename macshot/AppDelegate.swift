@@ -3396,7 +3396,9 @@ extension AppDelegate: OverlayWindowControllerDelegate {
 
         // Create live preview panel if there's space beside the capture region
         let overlayLevel = 257  // matches overlay window level
-        if let previewPanel = ScrollCapturePreviewPanel(captureRect: rect, screen: screen, overlayLevel: overlayLevel) {
+        if let previewPanel = ScrollCapturePreviewPanel(captureRect: rect, screen: screen, overlayLevel: overlayLevel, axis: axis) {
+            previewPanel.setAvoidFrame(controller.scrollCaptureHUDFrameInScreen())
+            scc.excludedWindowIDs.append(CGWindowID(previewPanel.windowNumber))
             previewPanel.orderFront(nil)
             scrollCapturePreviewPanel = previewPanel
         }
@@ -3406,6 +3408,7 @@ extension AppDelegate: OverlayWindowControllerDelegate {
             controller?.updateScrollCaptureProgress(
                 stripCount: count, pixelSize: scc.stitchedPixelSize,
                 autoScrolling: scc.autoScrollActive)
+            self.scrollCapturePreviewPanel?.setAvoidFrame(controller?.scrollCaptureHUDFrameInScreen())
         }
         scc.onPreviewUpdated = { [weak self] image in
             self?.scrollCapturePreviewPanel?.updatePreview(image: image)
@@ -3415,6 +3418,7 @@ extension AppDelegate: OverlayWindowControllerDelegate {
             controller?.updateScrollCaptureProgress(
                 stripCount: scc.stripCount, pixelSize: scc.stitchedPixelSize,
                 autoScrolling: true)
+            self.scrollCapturePreviewPanel?.setAvoidFrame(controller?.scrollCaptureHUDFrameInScreen())
         }
         scc.onSessionDone = { [weak self] finalImage in
             self?.handleScrollCaptureCompleted(finalImage: finalImage)
