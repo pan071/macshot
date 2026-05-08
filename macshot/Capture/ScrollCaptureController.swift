@@ -76,6 +76,9 @@ final class ScrollCaptureController {
     private var headerHeight: Int = 0    // frozen header height in pixels
     private var headerDetectionDone: Bool = false
     private var headerDetectionSamples: Int = 0
+    private var frozenLeadingWidth: Int = 0
+    private var frozenLeadingDetectionDone: Bool = false
+    private var frozenLeadingDetectionSamples: Int = 0
 
     // Scrollbar exclusion
     private var rightMarginPx: Int = 0
@@ -163,6 +166,9 @@ final class ScrollCaptureController {
         headerHeight = 0
         headerDetectionDone = false
         headerDetectionSamples = 0
+        frozenLeadingWidth = 0
+        frozenLeadingDetectionDone = false
+        frozenLeadingDetectionSamples = 0
         rightMarginPx = 0
         bottomMarginPx = 0
         rightMarginDetected = false
@@ -538,6 +544,11 @@ final class ScrollCaptureController {
             detectRightMargin(current: currentFrame, previous: previousFrame)
         }
 
+        if axis == .horizontal && frozenDetectionEnabled && !frozenLeadingDetectionDone {
+            // Detect fixed leading columns before offset calculation so Excel row headers do not pollute matching.
+            detectLeadingFrozenColumn(current: currentFrame, previous: previousFrame, shiftPx: 6)
+        }
+
         // Compute offset via Vision
         guard let offset = visionShift(current: currentFrame, previous: previousFrame) else {
             shotA = currentFrame
@@ -573,9 +584,9 @@ final class ScrollCaptureController {
             detectFrozenRegion(current: currentFrame, previous: previousFrame, shiftPx: offsetPx)
         }
 
-        // Bias by -1px so strips overlap by 1 extra row/column: the newer frame
-        // overwrites that seam, hiding sub-pixel rendering differences.
-        let safeOffset = max(1, offsetPx - 1)
+        // Vertical still draws the full current frame, so keep a 1px overlap to hide seams.
+        // Horizontal appends only the trailing new strip, so use the full measured offset.
+        let safeOffset = stitchOffset(from: offsetPx)
 
         // Incremental stitch: merge new content into mergedImage
         mergeNewContent(currentFrame: currentFrame, offsetPx: safeOffset)
@@ -648,21 +659,13 @@ final class ScrollCaptureController {
             // stays consistent across both directions.
             ctx.draw(existing, in: CGRect(x: 0, y: 0, width: existingW, height: h))
 
-            if headerDetectionDone && headerHeight > 0 {
-                // Frozen leading column detected: only append the newly revealed trailing columns.
-                let stripX = currentFrame.width - newCols
-                if let strip = currentFrame.cropping(to: CGRect(
-                    x: stripX, y: 0, width: newCols, height: h)) {
-                    ctx.draw(strip, in: CGRect(x: existingW, y: 0, width: newCols, height: h))
-                }
-            } else {
-                // No frozen column: draw the full current frame with natural overlap.
-                ctx.draw(currentFrame, in: CGRect(
-                    x: totalW - currentFrame.width,
-                    y: 0,
-                    width: currentFrame.width,
-                    height: h
-                ))
+            // Horizontal capture must append only the newly revealed trailing columns.
+            // Drawing the full current frame would duplicate fixed left-side row headers
+            // into the middle of Excel-style stitched images.
+            let stripX = currentFrame.width - newCols
+            if let strip = currentFrame.cropping(to: CGRect(
+                x: stripX, y: 0, width: newCols, height: h)) {
+                ctx.draw(strip, in: CGRect(x: existingW, y: 0, width: newCols, height: h))
             }
 
             guard let merged = ctx.makeImage() else { return }
@@ -739,6 +742,11 @@ final class ScrollCaptureController {
             detectRightMargin(current: currentFrame, previous: previousFrame)
         }
 
+        if axis == .horizontal && frozenDetectionEnabled && !frozenLeadingDetectionDone {
+            // Detect fixed leading columns before offset calculation so manual scroll uses the moving grid only.
+            detectLeadingFrozenColumn(current: currentFrame, previous: previousFrame, shiftPx: 6)
+        }
+
         guard let offset = visionShift(current: currentFrame, previous: previousFrame) else {
             shotA = currentFrame
             return
@@ -764,7 +772,7 @@ final class ScrollCaptureController {
             detectFrozenRegion(current: currentFrame, previous: previousFrame, shiftPx: offsetPx)
         }
 
-        let safeOffset = max(1, offsetPx - 1)
+        let safeOffset = stitchOffset(from: offsetPx)
         mergeNewContent(currentFrame: currentFrame, offsetPx: safeOffset)
 
         shotA = currentFrame
@@ -773,6 +781,16 @@ final class ScrollCaptureController {
 
         emitPreview()
         onStripAdded?(stripCount)
+    }
+
+    /// Converts a measured offset into the amount of content appended to the stitched image.
+    private func stitchOffset(from offsetPx: Int) -> Int {
+        switch axis {
+        case .vertical:
+            return max(1, offsetPx - 1)
+        case .horizontal:
+            return offsetPx
+        }
     }
 
     /// Final settled capture after scrolling stops — uses full TIFF settlement.
@@ -792,9 +810,9 @@ final class ScrollCaptureController {
         var curImg = current
         var prevImg = previous
         let maxCropY = current.height / 5
-        let maxCropX = current.width / 5
+        let maxCropX = current.width / 3
         let cropY = axis == .vertical && headerDetectionDone ? min(headerHeight, maxCropY) : 0
-        let cropX = axis == .horizontal && headerDetectionDone ? min(headerHeight, maxCropX) : 0
+        let cropX = axis == .horizontal ? min(horizontalMatchingLeftInset(width: current.width), maxCropX) : 0
         let cropW = current.width - cropX - rightMarginPx
         let cropH = current.height - cropY - bottomMarginPx
         if cropX > 0 || cropY > 0 || rightMarginPx > 0 || bottomMarginPx > 0 {
@@ -882,7 +900,7 @@ final class ScrollCaptureController {
         currentData: UnsafePointer<UInt8>,
         previousData: UnsafePointer<UInt8>
     ) -> UInt64 {
-        let cropLeft = headerDetectionDone ? min(headerHeight, width / 5) : 0
+        let cropLeft = horizontalMatchingLeftInset(width: width)
         let usableWidth = width - candidate - rightMarginPx - cropLeft
         let usableHeight = height - bottomMarginPx
         guard usableWidth > 20, usableHeight > 20 else { return UInt64.max }
@@ -906,6 +924,19 @@ final class ScrollCaptureController {
 
         guard samples > 0 else { return UInt64.max }
         return sad / samples
+    }
+
+    /// Returns the left inset ignored during horizontal matching to avoid fixed row headers.
+    private func horizontalMatchingLeftInset(width: Int) -> Int {
+        guard axis == .horizontal else { return 0 }
+
+        let defaultInset = min(180, max(80, width / 6))
+        let detectedInset = frozenLeadingDetectionDone && frozenLeadingWidth > 0
+            ? min(frozenLeadingWidth, width / 3)
+            : 0
+
+        // Excel and similar grids often keep row-number/header areas fixed on the left.
+        return max(defaultInset, detectedInset)
     }
 
     /// Extract raw BGRA pixel data from a CGImage.
@@ -995,6 +1026,8 @@ final class ScrollCaptureController {
         let rowStep = 4
 
         var frozenCols = 0
+        var stableCols = 0
+        var movingRun = 0
         for col in 0..<w {
             var colSAD: UInt64 = 0
             var samples: Int = 0
@@ -1010,32 +1043,39 @@ final class ScrollCaptureController {
                 samples += 1
             }
             let avg = samples > 0 ? colSAD / UInt64(samples) : 999
-            if avg > 8 {
-                frozenCols = col
+
+            // Excel's screen-left edge can contain noisy borders. Treat the
+            // fixed region as ending only after several consecutive moving columns.
+            if avg <= 8 {
+                stableCols += 1
+                movingRun = 0
+            } else {
+                movingRun += 1
+            }
+
+            if movingRun >= 4 {
+                frozenCols = max(0, col - movingRun + 1)
                 break
             }
             if col == w - 1 { return }
         }
 
-        if frozenCols >= 10 && frozenCols < (w * 6 / 10) {
-            headerDetectionSamples += 1
+        if stableCols >= 4 && frozenCols >= 4 && frozenCols < (w * 6 / 10) {
+            frozenLeadingDetectionSamples += 1
 
-            if headerDetectionSamples == 1 {
-                headerHeight = frozenCols
-                frozenTopHeight = CGFloat(headerHeight) / backingScale
-                headerDetectionDone = true
+            if frozenLeadingDetectionSamples == 1 {
+                frozenLeadingWidth = frozenCols
+                frozenLeadingDetectionDone = true
             } else {
-                if abs(frozenCols - headerHeight) <= 5 {
-                    headerHeight = min(headerHeight, frozenCols)
-                    frozenTopHeight = CGFloat(headerHeight) / backingScale
+                if abs(frozenCols - frozenLeadingWidth) <= 5 {
+                    frozenLeadingWidth = max(frozenLeadingWidth, frozenCols)
                 } else {
-                    headerHeight = 0
-                    frozenTopHeight = 0
+                    frozenLeadingWidth = 0
                 }
-                headerDetectionDone = true
+                frozenLeadingDetectionDone = true
             }
-        } else if frozenCols < 10 {
-            headerDetectionDone = true
+        } else if frozenCols < 4 {
+            frozenLeadingDetectionDone = true
         }
     }
 
