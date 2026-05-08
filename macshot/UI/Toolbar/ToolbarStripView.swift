@@ -26,6 +26,9 @@ class ToolbarStripView: NSView {
     var onButtonPressBegan: ((ToolbarButtonAction, ToolbarButtonView, NSEvent) -> Void)?
     var onButtonPressDragged: ((ToolbarButtonAction, ToolbarButtonView, NSEvent) -> Void)?
     var onButtonPressEnded: ((ToolbarButtonAction, ToolbarButtonView, NSEvent) -> Void)?
+    var onButtonSecondaryPressBegan: ((ToolbarButtonAction, ToolbarButtonView, NSEvent) -> Void)?
+    var onButtonSecondaryPressDragged: ((ToolbarButtonAction, ToolbarButtonView, NSEvent) -> Void)?
+    var onButtonSecondaryPressEnded: ((ToolbarButtonAction, ToolbarButtonView, NSEvent) -> Void)?
     var onReorder: (([ToolbarButtonAction]) -> Void)?
     var isReorderEnabled: Bool = false
     private(set) var isPerformingReorder: Bool = false
@@ -85,16 +88,25 @@ class ToolbarStripView: NSView {
             bv.onRightClick = { [weak self] action, view in self?.onRightClick?(action, view) }
             bv.onHover = { [weak self] action, hovered in self?.onHover?(action, hovered) }
             bv.onPressBegan = { [weak self] buttonView, event in
-                self?.handleButtonPressBegan(buttonView, event: event)
                 self?.onButtonPressBegan?(buttonView.action, buttonView, event)
             }
             bv.onPressDragged = { [weak self] buttonView, event in
-                self?.handleButtonPressDragged(buttonView, event: event)
                 self?.onButtonPressDragged?(buttonView.action, buttonView, event)
             }
             bv.onPressEnded = { [weak self] buttonView, event in
-                self?.handleButtonPressEnded(buttonView, event: event)
                 self?.onButtonPressEnded?(buttonView.action, buttonView, event)
+            }
+            bv.onSecondaryPressBegan = { [weak self] buttonView, event in
+                self?.handleButtonSecondaryPressBegan(buttonView, event: event)
+                self?.onButtonSecondaryPressBegan?(buttonView.action, buttonView, event)
+            }
+            bv.onSecondaryPressDragged = { [weak self] buttonView, event in
+                self?.handleButtonSecondaryPressDragged(buttonView, event: event)
+                self?.onButtonSecondaryPressDragged?(buttonView.action, buttonView, event)
+            }
+            bv.onSecondaryPressEnded = { [weak self] buttonView, event in
+                self?.handleButtonSecondaryPressEnded(buttonView, event: event)
+                self?.onButtonSecondaryPressEnded?(buttonView.action, buttonView, event)
             }
             addSubview(bv)
             buttonViews.append(bv)
@@ -192,8 +204,8 @@ class ToolbarStripView: NSView {
         reorderTimer?.invalidate()
     }
 
-    /// Schedules a long-press reorder gesture for vertical right-toolbar buttons.
-    private func handleButtonPressBegan(_ buttonView: ToolbarButtonView, event: NSEvent) {
+    /// Schedules a right-click long-press reorder gesture for vertical right-toolbar buttons.
+    private func handleButtonSecondaryPressBegan(_ buttonView: ToolbarButtonView, event: NSEvent) {
         guard shouldEnableReorder else { return }
 
         // Track the original press point so normal drags can cancel reordering before it begins.
@@ -208,8 +220,8 @@ class ToolbarStripView: NSView {
         }
     }
 
-    /// Updates the pending or active reorder gesture while the pointer is moving.
-    private func handleButtonPressDragged(_ buttonView: ToolbarButtonView, event: NSEvent) {
+    /// Updates the pending or active reorder gesture while the secondary pointer is moving.
+    private func handleButtonSecondaryPressDragged(_ buttonView: ToolbarButtonView, event: NSEvent) {
         if isPerformingReorder, draggedButtonView === buttonView {
             updateReorder(for: buttonView, event: event)
             return
@@ -226,8 +238,8 @@ class ToolbarStripView: NSView {
         }
     }
 
-    /// Ends the reorder gesture and emits the updated action order when needed.
-    private func handleButtonPressEnded(_ buttonView: ToolbarButtonView, event: NSEvent) {
+    /// Ends the secondary-click reorder gesture and emits the updated action order when needed.
+    private func handleButtonSecondaryPressEnded(_ buttonView: ToolbarButtonView, event: NSEvent) {
         _ = event
         if isPerformingReorder, draggedButtonView === buttonView {
             endReorderIfNeeded(shouldNotify: true)
@@ -261,8 +273,8 @@ class ToolbarStripView: NSView {
         let buttonPoint = convert(window?.mouseLocationOutsideOfEventStream ?? .zero, from: nil)
         draggedButtonOffsetY = buttonPoint.y - buttonView.frame.minY
 
-        // Prevent the normal click action from firing when the drag finishes.
-        buttonView.suppressCurrentClick()
+        // Prevent the context menu action from firing when the reorder finishes.
+        buttonView.suppressCurrentRightClick()
         buttonView.alphaValue = 0.92
         addSubview(buttonView, positioned: .above, relativeTo: nil)
     }
