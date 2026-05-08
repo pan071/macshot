@@ -8,6 +8,7 @@ class ScrollCaptureHUDView: NSView {
     private let autoScrollButton = NSButton()
     private let stopButton = NSButton()
     private var isAutoScrolling = false
+    private var axis: ScrollCaptureAxis = .vertical
 
     var onStop: (() -> Void)?
     var onToggleAutoScroll: (() -> Void)?
@@ -54,16 +55,18 @@ class ScrollCaptureHUDView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     func update(stripCount: Int, pixelSize: CGSize, backingScale: CGFloat,
-                maxScrollHeight: Int = 0, autoScrolling: Bool = false) {
+                maxScrollHeight: Int = 0, autoScrolling: Bool = false,
+                axis: ScrollCaptureAxis = .vertical) {
+        self.axis = axis
         let pw = Int(pixelSize.width)
         let ph = Int(pixelSize.height)
         let ptW = Int(CGFloat(pw) / backingScale)
         let ptH = Int(CGFloat(ph) / backingScale)
 
         if ptW > 0 && ptH > 0 {
-            infoLabel.stringValue = "\(L("Scroll Capture"))  ·  \(ptW)×\(ptH)"
+            infoLabel.stringValue = "\(axis.indicatorSymbol) \(L("Scroll Capture"))  ·  \(ptW)×\(ptH)"
         } else {
-            infoLabel.stringValue = L("Scroll Capture")
+            infoLabel.stringValue = "\(axis.indicatorSymbol) \(L("Scroll Capture"))"
         }
 
         updateAutoScrollState(autoScrolling)
