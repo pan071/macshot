@@ -4474,7 +4474,8 @@ class OverlayView: NSView {
             y: startPoint.y - selectionRect.origin.y
         )
         isToolbarSelectionMoveActive = true
-        hoveredTooltip = L("Drag to reposition")
+        // Toolbar drag should move the selection directly without showing a transient hint tooltip.
+        hoveredTooltip = nil
         needsDisplay = true
         displayIfNeeded()
     }
@@ -6542,8 +6543,8 @@ class OverlayView: NSView {
                 snappedWindowImage = nil
                 rebuildToolbarLayout()
             }
-            // Show drag hint tooltip
-            hoveredTooltip = L("Drag to reposition")
+            // Legacy synchronous drag path should also avoid showing a transient hint tooltip.
+            hoveredTooltip = nil
             needsDisplay = true
             displayIfNeeded()
             // Synchronous drag loop: tracks mouse from button press until release
