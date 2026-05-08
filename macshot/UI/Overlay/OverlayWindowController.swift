@@ -438,6 +438,11 @@ class OverlayWindowController {
         overlayView?.needsDisplay = true
     }
 
+    /// Returns the scroll capture HUD frame in screen coordinates for floating preview avoidance.
+    func scrollCaptureHUDFrameInScreen() -> NSRect? {
+        overlayView?.scrollCaptureHUDFrameInScreen()
+    }
+
     /// End the current capture session. The window/view/panel are KEPT ALIVE
     /// and returned to a clean idle state, so the next session can reuse this
     /// same controller (and crucially, the same NSPanel CGSWindow — which is

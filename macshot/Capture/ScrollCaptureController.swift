@@ -399,29 +399,7 @@ final class ScrollCaptureController {
     /// Core auto-scroll loop: scroll → captureAndCompare → repeat.
     private func autoScrollLoop(linesPerTick: Int32, burstCount: Int) async {
         while isActive && autoScrollActive {
-            // Post scroll event(s)
-            for _ in 0..<burstCount {
-                let wheel1: Int32
-                let wheel2: Int32
-                switch axis {
-                case .vertical:
-                    wheel1 = -linesPerTick
-                    wheel2 = 0
-                case .horizontal:
-                    wheel1 = 0
-                    wheel2 = -linesPerTick
-                }
-                if let event = CGEvent(
-                    scrollWheelEvent2Source: nil,
-                    units: .line,
-                    wheelCount: 2,
-                    wheel1: wheel1,
-                    wheel2: wheel2,
-                    wheel3: 0
-                ) {
-                    event.post(tap: .cghidEventTap)
-                }
-            }
+            postScrollEvents(linesPerTick: linesPerTick, burstCount: burstCount, useShiftFallback: false)
 
             // captureAndCompare: settle, capture, compare, stitch.
             // `isCapturing` serializes this against a manual settledCapture
@@ -432,7 +410,13 @@ final class ScrollCaptureController {
                 continue
             }
             isCapturing = true
-            let success = await captureAndCompare()
+            var success = await captureAndCompare()
+
+            // Some apps ignore native horizontal wheel events but accept Shift + vertical wheel.
+            if !success && axis == .horizontal && isActive && autoScrollActive {
+                postScrollEvents(linesPerTick: linesPerTick, burstCount: burstCount, useShiftFallback: true)
+                success = await captureAndCompare()
+            }
             isCapturing = false
 
             if !success {
@@ -457,6 +441,44 @@ final class ScrollCaptureController {
             // Small breathing room
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
+    }
+
+    /// Posts synthetic scroll wheel events for the current capture axis.
+    private func postScrollEvents(linesPerTick: Int32, burstCount: Int, useShiftFallback: Bool) {
+        // Send a small burst so the target app performs an observable scroll step.
+        for _ in 0..<burstCount {
+            guard let event = makeScrollEvent(linesPerTick: linesPerTick, useShiftFallback: useShiftFallback) else { continue }
+            event.post(tap: .cghidEventTap)
+        }
+    }
+
+    /// Builds a scroll wheel event that matches the active axis and optional horizontal fallback style.
+    private func makeScrollEvent(linesPerTick: Int32, useShiftFallback: Bool) -> CGEvent? {
+        // Shift fallback maps horizontal intent onto the common "Shift + vertical wheel" convention.
+        if axis == .horizontal && useShiftFallback {
+            guard let event = CGEvent(
+                scrollWheelEvent2Source: nil,
+                units: .line,
+                wheelCount: 1,
+                wheel1: -linesPerTick,
+                wheel2: 0,
+                wheel3: 0
+            ) else { return nil }
+            event.flags = .maskShift
+            return event
+        }
+
+        // Native events use wheel1 for vertical movement and wheel2 for horizontal movement.
+        let wheel1: Int32 = axis == .vertical ? -linesPerTick : 0
+        let wheel2: Int32 = axis == .horizontal ? -linesPerTick : 0
+        return CGEvent(
+            scrollWheelEvent2Source: nil,
+            units: .line,
+            wheelCount: 2,
+            wheel1: wheel1,
+            wheel2: wheel2,
+            wheel3: 0
+        )
     }
 
     /// The core capture-and-compare cycle.
@@ -526,7 +548,11 @@ final class ScrollCaptureController {
             return false
         }
 
-        let offsetPx = Int(round(offset))
+        let offsetPx = refinedOffset(
+            current: currentFrame,
+            previous: previousFrame,
+            estimatedOffset: Int(round(offset))
+        )
         guard offsetPx > 0 else {
             shotA = currentFrame
             return false
@@ -547,10 +573,8 @@ final class ScrollCaptureController {
             detectFrozenRegion(current: currentFrame, previous: previousFrame, shiftPx: offsetPx)
         }
 
-        // Use Vision's offset directly — pixel refinement can worsen it on
-        // low-contrast / dark-themed content. Bias by -1px so strips overlap by
-        // 1 extra row: the newer frame overwrites that row, hiding any sub-pixel
-        // rendering differences at the seam boundary.
+        // Bias by -1px so strips overlap by 1 extra row/column: the newer frame
+        // overwrites that seam, hiding sub-pixel rendering differences.
         let safeOffset = max(1, offsetPx - 1)
 
         // Incremental stitch: merge new content into mergedImage
@@ -720,7 +744,11 @@ final class ScrollCaptureController {
             return
         }
 
-        let offsetPx = Int(round(offset))
+        let offsetPx = refinedOffset(
+            current: currentFrame,
+            previous: previousFrame,
+            estimatedOffset: Int(round(offset))
+        )
         guard offsetPx > 0 else {
             shotA = currentFrame
             return
@@ -792,6 +820,92 @@ final class ScrollCaptureController {
             // Reuse the same finite/in-frame validation against the frame width for horizontal registration.
             return ScrollFrameAnalyzer.validatedVerticalShift(-obs.alignmentTransform.tx, frameHeight: curImg.width)
         }
+    }
+
+    /// Refines Vision's estimated scroll offset with sampled pixel matching.
+    private func refinedOffset(current: CGImage, previous: CGImage, estimatedOffset: Int) -> Int {
+        switch axis {
+        case .vertical:
+            return estimatedOffset
+        case .horizontal:
+            return refinedHorizontalOffset(
+                current: current,
+                previous: previous,
+                estimatedOffset: estimatedOffset
+            )
+        }
+    }
+
+    /// Searches around the horizontal offset estimate and chooses the lowest-SAD overlap.
+    private func refinedHorizontalOffset(current: CGImage, previous: CGImage, estimatedOffset: Int) -> Int {
+        guard estimatedOffset > 0 else { return estimatedOffset }
+        guard current.width == previous.width, current.height == previous.height else { return estimatedOffset }
+        guard let curData = pixelData(for: current),
+              let prevData = pixelData(for: previous) else { return estimatedOffset }
+
+        let w = current.width
+        let h = current.height
+        let bytesPerRow = w * 4
+        let searchRadius = max(24, min(120, estimatedOffset / 3))
+        let maxOffset = min(w - 8, estimatedOffset + searchRadius)
+        let minOffset = max(1, estimatedOffset - searchRadius)
+        guard minOffset < maxOffset else { return estimatedOffset }
+
+        var bestOffset = estimatedOffset
+        var bestScore = UInt64.max
+        let searchStep = 1
+
+        for candidate in stride(from: minOffset, through: maxOffset, by: searchStep) {
+            let score = horizontalOverlapScore(
+                candidate: candidate,
+                width: w,
+                height: h,
+                bytesPerRow: bytesPerRow,
+                currentData: curData,
+                previousData: prevData
+            )
+            if score < bestScore {
+                bestScore = score
+                bestOffset = candidate
+            }
+        }
+
+        return bestOffset
+    }
+
+    /// Computes normalized SAD for the horizontal overlap implied by a candidate offset.
+    private func horizontalOverlapScore(
+        candidate: Int,
+        width: Int,
+        height: Int,
+        bytesPerRow: Int,
+        currentData: UnsafePointer<UInt8>,
+        previousData: UnsafePointer<UInt8>
+    ) -> UInt64 {
+        let cropLeft = headerDetectionDone ? min(headerHeight, width / 5) : 0
+        let usableWidth = width - candidate - rightMarginPx - cropLeft
+        let usableHeight = height - bottomMarginPx
+        guard usableWidth > 20, usableHeight > 20 else { return UInt64.max }
+
+        let colStep = max(1, usableWidth / 96)
+        let rowStep = max(1, usableHeight / 48)
+        var sad: UInt64 = 0
+        var samples: UInt64 = 0
+
+        for row in stride(from: 0, to: usableHeight, by: rowStep) {
+            let rowOffset = row * bytesPerRow
+            for col in stride(from: cropLeft, to: cropLeft + usableWidth, by: colStep) {
+                let prevIndex = rowOffset + (col + candidate) * 4
+                let curIndex = rowOffset + col * 4
+                sad += UInt64(abs(Int(previousData[prevIndex]) - Int(currentData[curIndex]))
+                            + abs(Int(previousData[prevIndex + 1]) - Int(currentData[curIndex + 1]))
+                            + abs(Int(previousData[prevIndex + 2]) - Int(currentData[curIndex + 2])))
+                samples += 1
+            }
+        }
+
+        guard samples > 0 else { return UInt64.max }
+        return sad / samples
     }
 
     /// Extract raw BGRA pixel data from a CGImage.
