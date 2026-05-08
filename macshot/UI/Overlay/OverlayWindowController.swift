@@ -232,6 +232,11 @@ class OverlayWindowController {
         overlayView?.needsDisplay = true
     }
 
+    /// Returns the scroll capture HUD frame in screen coordinates for floating preview avoidance.
+    func scrollCaptureHUDFrameInScreen() -> NSRect? {
+        overlayView?.scrollCaptureHUDFrameInScreen()
+    }
+
     func dismiss() {
         saveSelectionIfNeeded()
         overlayView?.reset()
