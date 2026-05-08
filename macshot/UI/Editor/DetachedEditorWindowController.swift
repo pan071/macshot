@@ -603,7 +603,10 @@ extension DetachedEditorWindowController: OverlayViewDelegate {
     func overlayViewDidRequestStartRecording(rect: NSRect) {}
     func overlayViewDidRequestStopRecording() {}
     func overlayViewDidRequestDetach() {}
-    func overlayViewDidRequestScrollCapture(rect: NSRect) {}
+    func overlayViewDidRequestScrollCapture(rect: NSRect, axis: ScrollCaptureAxis) {
+        _ = rect
+        _ = axis
+    }
     func overlayViewDidRequestStopScrollCapture() {}
     func overlayViewDidRequestCancelScrollCapture() {}
     func overlayViewDidRequestToggleAutoScroll() {}
@@ -726,7 +729,17 @@ private class AddCaptureOverlayHandler: NSObject, OverlayWindowControllerDelegat
     func overlayDidRequestUpload(_ controller: OverlayWindowController, image: NSImage, annotationData: CaptureAnnotationData?) {}
     func overlayDidRequestStartRecording(_ controller: OverlayWindowController, rect: NSRect, screen: NSScreen) {}
     func overlayDidRequestStopRecording(_ controller: OverlayWindowController) {}
-    func overlayDidRequestScrollCapture(_ controller: OverlayWindowController, rect: NSRect, screen: NSScreen) {}
+    func overlayDidRequestScrollCapture(
+        _ controller: OverlayWindowController,
+        rect: NSRect,
+        screen: NSScreen,
+        axis: ScrollCaptureAxis
+    ) {
+        _ = controller
+        _ = rect
+        _ = screen
+        _ = axis
+    }
     func overlayDidRequestStopScrollCapture(_ controller: OverlayWindowController) {}
     func overlayDidRequestCancelScrollCapture(_ controller: OverlayWindowController) {}
     func overlayDidRequestToggleAutoScroll(_ controller: OverlayWindowController) {}

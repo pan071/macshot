@@ -180,7 +180,10 @@ enum ToolbarCustomAction: Int {
             return button
         case .scrollCapture:
             guard !isRecording && !isEditorMode else { return nil }
-            return ToolbarButton(action: .scrollCapture, sfSymbol: "scroll", tooltip: L("Scroll Capture"))
+            var scrollCaptureBtn = ToolbarButton(action: .scrollCapture, sfSymbol: "scroll", tooltip: L("Scroll Capture"))
+            // Right-click exposes the vertical/horizontal axis picker.
+            scrollCaptureBtn.hasContextMenu = true
+            return scrollCaptureBtn
         case .invertColors:
             return ToolbarButton(
                 action: .invertColors,
