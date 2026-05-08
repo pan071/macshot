@@ -418,10 +418,11 @@ class ToolbarLayout {
 
         // Scroll Capture (tag 1010) — hidden when recording or in editor mode
         if !isRecording && !isEditorMode && actionEnabled(1010) {
-            buttons.append(
-                ToolbarButton(
-                    action: .scrollCapture, sfSymbol: "scroll",
-                    tooltip: L("Scroll Capture")))
+            var scrollCaptureBtn = ToolbarButton(
+                action: .scrollCapture, sfSymbol: "scroll",
+                tooltip: L("Scroll Capture"))
+            scrollCaptureBtn.hasContextMenu = true
+            buttons.append(scrollCaptureBtn)
         }
 
         // Record (tag 1009) — hidden in editor mode. Right-click for options.

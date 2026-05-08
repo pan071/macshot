@@ -25,7 +25,8 @@ protocol OverlayWindowControllerDelegate: AnyObject {
         _ controller: OverlayWindowController, rect: NSRect, screen: NSScreen)
     func overlayDidRequestStopRecording(_ controller: OverlayWindowController)
     func overlayDidRequestScrollCapture(
-        _ controller: OverlayWindowController, rect: NSRect, screen: NSScreen)
+        _ controller: OverlayWindowController, rect: NSRect, screen: NSScreen,
+        axis: ScrollCaptureAxis)
     func overlayDidRequestStopScrollCapture(_ controller: OverlayWindowController)
     func overlayDidRequestToggleAutoScroll(_ controller: OverlayWindowController)
     func overlayDidRequestAccessibilityPermission(_ controller: OverlayWindowController)
@@ -180,8 +181,9 @@ class OverlayWindowController {
     }
 
     /// Set flag so overlay triggers scroll capture immediately after user makes a selection.
-    func setAutoScrollCaptureMode() {
+    func setAutoScrollCaptureMode(axis: ScrollCaptureAxis = .vertical) {
         overlayView?.autoScrollCaptureMode = true
+        overlayView?.autoScrollCaptureAxis = axis
     }
 
     /// Set flag so overlay auto-confirms immediately after selection (no toolbars, no save).
@@ -202,9 +204,15 @@ class OverlayWindowController {
             rect: overlayView?.selectionRect ?? .zero)
     }
 
-    func setScrollCaptureState(isActive: Bool, stripCount: Int = 0, pixelSize: CGSize = .zero,
-                               maxHeight: Int = 0) {
+    func setScrollCaptureState(
+        isActive: Bool,
+        stripCount: Int = 0,
+        pixelSize: CGSize = .zero,
+        maxHeight: Int = 0,
+        axis: ScrollCaptureAxis = .vertical
+    ) {
         overlayView?.scrollCaptureMaxHeight = maxHeight
+        overlayView?.scrollCaptureAxis = axis
         if isActive {
             overlayView?.startScrollCaptureMode()
         } else {
@@ -536,14 +544,19 @@ extension OverlayWindowController: OverlayViewDelegate {
         overlayDelegate?.overlayDidRequestStopRecording(self)
     }
 
-    func overlayViewDidRequestScrollCapture(rect: NSRect) {
+    func overlayViewDidRequestScrollCapture(rect: NSRect, axis: ScrollCaptureAxis) {
         let screenRect = NSRect(
             x: screen.frame.minX + rect.minX,
             y: screen.frame.minY + rect.minY,
             width: rect.width,
             height: rect.height
         )
-        overlayDelegate?.overlayDidRequestScrollCapture(self, rect: screenRect, screen: screen)
+        overlayDelegate?.overlayDidRequestScrollCapture(
+            self,
+            rect: screenRect,
+            screen: screen,
+            axis: axis
+        )
     }
 
     func overlayViewDidRequestStopScrollCapture() {

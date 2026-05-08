@@ -61,6 +61,7 @@ final class ScrollCaptureController {
 
     private let captureRect: NSRect
     private let screen: NSScreen
+    private let axis: ScrollCaptureAxis
     private let backingScale: CGFloat
 
     // Dedicated serial queue for capture-and-compare (off main thread)
@@ -77,6 +78,7 @@ final class ScrollCaptureController {
 
     // Scrollbar exclusion
     private var rightMarginPx: Int = 0
+    private var bottomMarginPx: Int = 0
     private var rightMarginDetected: Bool = false
 
     // Match tracking
@@ -114,9 +116,10 @@ final class ScrollCaptureController {
 
     // MARK: - Init
 
-    init(captureRect: NSRect, screen: NSScreen) {
+    init(captureRect: NSRect, screen: NSScreen, axis: ScrollCaptureAxis = .vertical) {
         self.captureRect = captureRect
         self.screen      = screen
+        self.axis = axis
         self.backingScale = screen.backingScaleFactor
     }
 
@@ -159,6 +162,7 @@ final class ScrollCaptureController {
         headerDetectionDone = false
         headerDetectionSamples = 0
         rightMarginPx = 0
+        bottomMarginPx = 0
         rightMarginDetected = false
         matchNotFoundCount = 0
         didReportFirstMatch = false
@@ -379,8 +383,24 @@ final class ScrollCaptureController {
         while isActive && autoScrollActive {
             // Post scroll event(s)
             for _ in 0..<burstCount {
-                if let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1,
-                                       wheel1: -linesPerTick, wheel2: 0, wheel3: 0) {
+                let wheel1: Int32
+                let wheel2: Int32
+                switch axis {
+                case .vertical:
+                    wheel1 = -linesPerTick
+                    wheel2 = 0
+                case .horizontal:
+                    wheel1 = 0
+                    wheel2 = -linesPerTick
+                }
+                if let event = CGEvent(
+                    scrollWheelEvent2Source: nil,
+                    units: .line,
+                    wheelCount: 2,
+                    wheel1: wheel1,
+                    wheel2: wheel2,
+                    wheel3: 0
+                ) {
                     event.post(tap: .cghidEventTap)
                 }
             }
@@ -400,7 +420,8 @@ final class ScrollCaptureController {
 
             // Check max height
             if let merged = mergedImage, maxScrollHeight > 0 {
-                if merged.height >= maxScrollHeight {
+                let primaryLength = axis == .vertical ? merged.height : merged.width
+                if primaryLength >= maxScrollHeight {
                     stopSession()
                     return
                 }
@@ -485,7 +506,7 @@ final class ScrollCaptureController {
         }
 
         // Need minimum shift to avoid noise
-        let minShift = currentFrame.height / 10
+        let minShift = primaryDimension(of: currentFrame) / 10
         if offsetPx < minShift {
             // Don't update shotA — let shifts accumulate
             return false
@@ -496,7 +517,7 @@ final class ScrollCaptureController {
 
         // Header detection (first few frames)
         if frozenDetectionEnabled && !headerDetectionDone {
-            detectHeader(current: currentFrame, previous: previousFrame, shiftPx: offsetPx)
+            detectFrozenRegion(current: currentFrame, previous: previousFrame, shiftPx: offsetPx)
         }
 
         // Use Vision's offset directly — pixel refinement can worsen it on
@@ -526,38 +547,78 @@ final class ScrollCaptureController {
             return
         }
 
-        let w = currentFrame.width
-        let existingH = existing.height
-        let newRows = offsetPx  // pixels of new content
-        guard newRows > 0, newRows <= currentFrame.height else { return }
-
-        let totalH = existingH + newRows
-
         let cs = existing.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!
         let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
-        guard let ctx = CGContext(data: nil, width: w, height: totalH,
-                                  bitsPerComponent: 8, bytesPerRow: w * 4,
-                                  space: cs, bitmapInfo: bitmapInfo) else { return }
 
-        // Draw existing image at the top (CGContext: bottom-left origin, so top = highest y)
-        ctx.draw(existing, in: CGRect(x: 0, y: newRows, width: w, height: existingH))
+        switch axis {
+        case .vertical:
+            let w = currentFrame.width
+            let existingH = existing.height
+            let newRows = offsetPx  // pixels of new content
+            guard newRows > 0, newRows <= currentFrame.height else { return }
 
-        if headerDetectionDone && headerHeight > 0 {
-            // Sticky header detected: only append the bottom newRows pixels.
-            let stripY = currentFrame.height - newRows
-            if let strip = currentFrame.cropping(to: CGRect(
-                x: 0, y: stripY, width: w, height: newRows)) {
-                ctx.draw(strip, in: CGRect(x: 0, y: 0, width: w, height: newRows))
+            let totalH = existingH + newRows
+            guard let ctx = CGContext(data: nil, width: w, height: totalH,
+                                      bitsPerComponent: 8, bytesPerRow: w * 4,
+                                      space: cs, bitmapInfo: bitmapInfo) else { return }
+
+            // Draw existing image at the top (CGContext: bottom-left origin, so top = highest y)
+            ctx.draw(existing, in: CGRect(x: 0, y: newRows, width: w, height: existingH))
+
+            if headerDetectionDone && headerHeight > 0 {
+                // Sticky header detected: only append the bottom newRows pixels.
+                let stripY = currentFrame.height - newRows
+                if let strip = currentFrame.cropping(to: CGRect(
+                    x: 0, y: stripY, width: w, height: newRows)) {
+                    ctx.draw(strip, in: CGRect(x: 0, y: 0, width: w, height: newRows))
+                }
+            } else {
+                // No header: draw full current frame with natural overlap.
+                ctx.draw(currentFrame, in: CGRect(x: 0, y: 0, width: w, height: currentFrame.height))
             }
-        } else {
-            // No header: draw full current frame with natural overlap.
-            ctx.draw(currentFrame, in: CGRect(x: 0, y: 0, width: w, height: currentFrame.height))
-        }
 
-        guard let merged = ctx.makeImage() else { return }
-        mergedImage = merged
-        stitchedImage = merged
-        stitchedPixelSize = CGSize(width: CGFloat(w), height: CGFloat(totalH))
+            guard let merged = ctx.makeImage() else { return }
+            mergedImage = merged
+            stitchedImage = merged
+            stitchedPixelSize = CGSize(width: CGFloat(w), height: CGFloat(totalH))
+        case .horizontal:
+            let h = currentFrame.height
+            let existingW = existing.width
+            let newCols = offsetPx  // pixels of new content
+            guard newCols > 0, newCols <= currentFrame.width else { return }
+
+            let totalW = existingW + newCols
+            guard let ctx = CGContext(data: nil, width: totalW, height: h,
+                                      bitsPerComponent: 8, bytesPerRow: totalW * 4,
+                                      space: cs, bitmapInfo: bitmapInfo) else { return }
+
+            // Draw the accumulated image first, then append the current frame on the right.
+            // This mirrors the vertical path's "natural overlap" behavior so seam handling
+            // stays consistent across both directions.
+            ctx.draw(existing, in: CGRect(x: 0, y: 0, width: existingW, height: h))
+
+            if headerDetectionDone && headerHeight > 0 {
+                // Frozen leading column detected: only append the newly revealed trailing columns.
+                let stripX = currentFrame.width - newCols
+                if let strip = currentFrame.cropping(to: CGRect(
+                    x: stripX, y: 0, width: newCols, height: h)) {
+                    ctx.draw(strip, in: CGRect(x: existingW, y: 0, width: newCols, height: h))
+                }
+            } else {
+                // No frozen column: draw the full current frame with natural overlap.
+                ctx.draw(currentFrame, in: CGRect(
+                    x: totalW - currentFrame.width,
+                    y: 0,
+                    width: currentFrame.width,
+                    height: h
+                ))
+            }
+
+            guard let merged = ctx.makeImage() else { return }
+            mergedImage = merged
+            stitchedImage = merged
+            stitchedPixelSize = CGSize(width: CGFloat(totalW), height: CGFloat(h))
+        }
     }
 
     private func stopAutoScroll() {
@@ -638,14 +699,14 @@ final class ScrollCaptureController {
             return
         }
 
-        let minShift = currentFrame.height / 10
+        let minShift = primaryDimension(of: currentFrame) / 10
         if offsetPx < minShift { return }
 
         hasScrolledOnce = true
         consecutiveZeroShifts = 0
 
         if frozenDetectionEnabled && !headerDetectionDone {
-            detectHeader(current: currentFrame, previous: previousFrame, shiftPx: offsetPx)
+            detectFrozenRegion(current: currentFrame, previous: previousFrame, shiftPx: offsetPx)
         }
 
         let safeOffset = max(1, offsetPx - 1)
@@ -676,12 +737,14 @@ final class ScrollCaptureController {
         var curImg = current
         var prevImg = previous
         let maxCropY = current.height / 5
-        let cropY = headerDetectionDone ? min(headerHeight, maxCropY) : 0
-        let cropW = current.width - rightMarginPx
-        let cropH = current.height - cropY
-        if cropY > 0 || rightMarginPx > 0 {
+        let maxCropX = current.width / 5
+        let cropY = axis == .vertical && headerDetectionDone ? min(headerHeight, maxCropY) : 0
+        let cropX = axis == .horizontal && headerDetectionDone ? min(headerHeight, maxCropX) : 0
+        let cropW = current.width - cropX - rightMarginPx
+        let cropH = current.height - cropY - bottomMarginPx
+        if cropX > 0 || cropY > 0 || rightMarginPx > 0 || bottomMarginPx > 0 {
             guard cropH > 20 && cropW > 20 else { return nil }
-            let cropRect = CGRect(x: 0, y: cropY, width: cropW, height: cropH)
+            let cropRect = CGRect(x: cropX, y: cropY, width: cropW, height: cropH)
             guard let cc = current.cropping(to: cropRect),
                   let pc = previous.cropping(to: cropRect) else { return nil }
             curImg = cc
@@ -692,7 +755,12 @@ final class ScrollCaptureController {
         let handler = VNImageRequestHandler(cgImage: curImg, options: [:])
         guard (try? handler.perform([request])) != nil,
               let obs = request.results?.first as? VNImageTranslationAlignmentObservation else { return nil }
-        return obs.alignmentTransform.ty
+        switch axis {
+        case .vertical:
+            return obs.alignmentTransform.ty
+        case .horizontal:
+            return -obs.alignmentTransform.tx
+        }
     }
 
     /// Extract raw BGRA pixel data from a CGImage.
@@ -748,10 +816,25 @@ final class ScrollCaptureController {
         if scrollbarWidth >= 3 && scrollbarWidth <= 40 {
             rightMarginPx = scrollbarWidth + 4
         }
+
+        if axis == .horizontal {
+            detectBottomMargin(current: current, previous: previous)
+        }
     }
 
-    // MARK: - Header (frozen region) detection
+    // MARK: - Frozen region detection
 
+    /// Detects a frozen region on the non-scrolling edge so duplicated sticky UI does not get stitched.
+    private func detectFrozenRegion(current: CGImage, previous: CGImage, shiftPx: Int) {
+        switch axis {
+        case .vertical:
+            detectHeader(current: current, previous: previous, shiftPx: shiftPx)
+        case .horizontal:
+            detectLeadingFrozenColumn(current: current, previous: previous, shiftPx: shiftPx)
+        }
+    }
+
+    /// Detects a sticky header for vertical scroll capture.
     private func detectHeader(current: CGImage, previous: CGImage, shiftPx: Int) {
         guard current.width == previous.width, current.height == previous.height else { return }
         guard shiftPx > 5 else { return }
@@ -808,6 +891,120 @@ final class ScrollCaptureController {
             }
         } else if frozenRows < 10 {
             headerDetectionDone = true
+        }
+    }
+
+    /// Detects a frozen leading column for horizontal scroll capture so fixed sidebars are excluded from stitching.
+    private func detectLeadingFrozenColumn(current: CGImage, previous: CGImage, shiftPx: Int) {
+        guard current.width == previous.width, current.height == previous.height else { return }
+        guard shiftPx > 5 else { return }
+
+        let w = current.width
+        let h = current.height
+
+        guard let curData = pixelData(for: current),
+              let prevData = pixelData(for: previous) else { return }
+
+        let bytesPerRow = w * 4
+        let compareHeight = max(4, h - bottomMarginPx)
+        let rowStep = 4
+
+        var frozenCols = 0
+        for col in 0..<w {
+            var colSAD: UInt64 = 0
+            var samples: Int = 0
+            for row in stride(from: 0, to: compareHeight, by: rowStep) {
+                let offset = row * bytesPerRow + col * 4
+                let cR = Int(curData[offset])
+                let cG = Int(curData[offset + 1])
+                let cB = Int(curData[offset + 2])
+                let pR = Int(prevData[offset])
+                let pG = Int(prevData[offset + 1])
+                let pB = Int(prevData[offset + 2])
+                colSAD += UInt64(abs(cR - pR) + abs(cG - pG) + abs(cB - pB))
+                samples += 1
+            }
+            let avg = samples > 0 ? colSAD / UInt64(samples) : 999
+            if avg > 8 {
+                frozenCols = col
+                break
+            }
+            if col == w - 1 { return }
+        }
+
+        if frozenCols >= 10 && frozenCols < (w * 6 / 10) {
+            headerDetectionSamples += 1
+
+            if headerDetectionSamples == 1 {
+                headerHeight = frozenCols
+                frozenTopHeight = CGFloat(headerHeight) / backingScale
+                headerDetectionDone = true
+            } else {
+                if abs(frozenCols - headerHeight) <= 5 {
+                    headerHeight = min(headerHeight, frozenCols)
+                    frozenTopHeight = CGFloat(headerHeight) / backingScale
+                } else {
+                    headerHeight = 0
+                    frozenTopHeight = 0
+                }
+                headerDetectionDone = true
+            }
+        } else if frozenCols < 10 {
+            headerDetectionDone = true
+        }
+    }
+
+    /// Detects a horizontal scrollbar on the bottom edge for horizontal scroll capture.
+    private func detectBottomMargin(current: CGImage, previous: CGImage) {
+        guard current.width == previous.width, current.height == previous.height else { return }
+        guard let curData = pixelData(for: current),
+              let prevData = pixelData(for: previous) else { return }
+
+        let w = current.width
+        let h = current.height
+        let bytesPerRow = w * 4
+
+        let colStart = w * 2 / 10
+        let colEnd = w * 8 / 10
+        let colStep = max(1, (colEnd - colStart) / 40)
+        let maxScanRows = min(50, h / 8)
+
+        var scrollbarHeight = 0
+        for rowOffset in 0..<maxScanRows {
+            let row = h - 1 - rowOffset
+            var sad: UInt64 = 0
+            var samples: Int = 0
+
+            for col in stride(from: colStart, to: colEnd, by: colStep) {
+                let idx = row * bytesPerRow + col * 4
+                guard idx + 2 < h * bytesPerRow else { continue }
+                sad += UInt64(abs(Int(curData[idx]) - Int(prevData[idx]))
+                            + abs(Int(curData[idx + 1]) - Int(prevData[idx + 1]))
+                            + abs(Int(curData[idx + 2]) - Int(prevData[idx + 2])))
+                samples += 1
+            }
+            guard samples > 0 else { continue }
+            let avgSAD = sad / UInt64(samples)
+
+            if avgSAD > 8 {
+                scrollbarHeight = rowOffset + 1
+            } else if scrollbarHeight > 0 {
+                break
+            }
+        }
+
+        if scrollbarHeight >= 3 && scrollbarHeight <= 40 {
+            bottomMarginPx = scrollbarHeight + 4
+        }
+    }
+
+    /// Returns the current frame's size on the active scrolling axis.
+    private func primaryDimension(of image: CGImage) -> Int {
+        switch axis {
+        case .vertical:
+            return image.height
+        case .horizontal:
+            return image.width
         }
     }
 

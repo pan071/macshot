@@ -35,6 +35,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     private var selectionBorderOverlay: SelectionBorderOverlay?
     private var menuBarIconWasHidden: Bool = false  // restore after recording if user had it hidden
     private var scrollCaptureController: ScrollCaptureController?
+    /// Axis used for the next menu-initiated scroll capture flow.
+    private var pendingScrollCaptureAxis: ScrollCaptureAxis = .vertical
     /// The overlay controller whose selection is being scroll-captured.
     private var scrollCaptureOverlayController: OverlayWindowController?
     private var scrollCapturePreviewPanel: ScrollCapturePreviewPanel?
@@ -606,6 +608,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
 
     @objc private func scrollCapture() {
         pendingScrollCaptureMode = true
+        pendingScrollCaptureAxis = .vertical
         startCapture(fromMenu: true)
     }
 
@@ -780,7 +783,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
             if pendingRecordMode { controller.setAutoRecordMode() }
             if pendingOCRMode { controller.setAutoOCRMode() }
             if pendingQuickCaptureMode { controller.setAutoQuickSaveMode() }
-            if pendingScrollCaptureMode { controller.setAutoScrollCaptureMode() }
+            if pendingScrollCaptureMode {
+                controller.setAutoScrollCaptureMode(axis: pendingScrollCaptureAxis)
+            }
             controller.showOverlay()
             let isMouseScreen = (screen == mouseScreen) || (mouseScreen == nil && screen == NSScreen.main)
             if (pendingFullScreen || pendingFullScreenRecord) && isMouseScreen {
@@ -2207,7 +2212,12 @@ extension AppDelegate: OverlayWindowControllerDelegate {
         exitRecordingMenuBarMode()
     }
 
-    func overlayDidRequestScrollCapture(_ controller: OverlayWindowController, rect: NSRect, screen: NSScreen) {
+    func overlayDidRequestScrollCapture(
+        _ controller: OverlayWindowController,
+        rect: NSRect,
+        screen: NSScreen,
+        axis: ScrollCaptureAxis
+    ) {
         if !AXIsProcessTrusted() {
             dismissOverlays()
             let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
@@ -2229,7 +2239,7 @@ extension AppDelegate: OverlayWindowControllerDelegate {
 
         scrollCaptureOverlayController = controller
 
-        let scc = ScrollCaptureController(captureRect: rect, screen: screen)
+        let scc = ScrollCaptureController(captureRect: rect, screen: screen, axis: axis)
         scc.excludedWindowIDs = overlayControllers.map { $0.windowNumber }
         scrollCaptureController = scc
 
@@ -2237,7 +2247,7 @@ extension AppDelegate: OverlayWindowControllerDelegate {
         let maxH = UserDefaults.standard.object(forKey: "scrollMaxHeight") as? Int ?? 30000
 
         // Tell the triggering overlay to enter scroll capture mode
-        controller.setScrollCaptureState(isActive: true, maxHeight: maxH)
+        controller.setScrollCaptureState(isActive: true, maxHeight: maxH, axis: axis)
 
         // Create live preview panel if there's space beside the capture region
         let overlayLevel = 257  // matches overlay window level

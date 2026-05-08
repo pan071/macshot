@@ -21,7 +21,7 @@ protocol OverlayViewDelegate: AnyObject {
     func overlayViewDidRequestStartRecording(rect: NSRect)
     func overlayViewDidRequestStopRecording()
     func overlayViewDidRequestDetach()
-    func overlayViewDidRequestScrollCapture(rect: NSRect)
+    func overlayViewDidRequestScrollCapture(rect: NSRect, axis: ScrollCaptureAxis)
     func overlayViewDidRequestStopScrollCapture()
     func overlayViewDidRequestToggleAutoScroll()
     func overlayViewDidRequestAccessibilityPermission()
@@ -596,6 +596,8 @@ class OverlayView: NSView {
     var autoOCRMode: Bool = false  // set by "Capture OCR" menu — triggers OCR immediately after selection
     var autoQuickSaveMode: Bool = false  // set by "Quick Capture" menu — quick-saves immediately after selection
     var autoScrollCaptureMode: Bool = false  // set by "Scroll Capture" menu — triggers scroll capture immediately after selection
+    /// The axis to use when auto-triggering scroll capture after selection confirmation.
+    var autoScrollCaptureAxis: ScrollCaptureAxis = .vertical
     var autoConfirmMode: Bool = false  // set by "Add Capture" — auto-confirms selection (no toolbars, no save)
 
     // Recording session overrides (popover settings — nil means use UserDefaults default)
@@ -610,6 +612,7 @@ class OverlayView: NSView {
     var scrollCapturePixelSize: CGSize = .zero
     var scrollCaptureMaxHeight: Int = 0
     var scrollCaptureAutoScrolling: Bool = false
+    var scrollCaptureAxis: ScrollCaptureAxis = .vertical
     private var scrollCaptureHUDPanel: ScrollCaptureHUDPanel?
     private var scrollCaptureMouseTap: CFMachPort?
     private var scrollCaptureMouseTapSource: CFRunLoopSource?
@@ -709,7 +712,8 @@ class OverlayView: NSView {
             stripCount: 0, pixelSize: .zero,
             backingScale: window?.backingScaleFactor ?? 2,
             maxScrollHeight: scrollCaptureMaxHeight,
-            autoScrolling: scrollCaptureAutoScrolling)
+            autoScrolling: scrollCaptureAutoScrolling,
+            axis: scrollCaptureAxis)
         if let win = window {
             panel.position(relativeTo: selectionRect, in: win)
         }
@@ -749,7 +753,8 @@ class OverlayView: NSView {
             pixelSize: scrollCapturePixelSize,
             backingScale: window?.backingScaleFactor ?? 2,
             maxScrollHeight: scrollCaptureMaxHeight,
-            autoScrolling: scrollCaptureAutoScrolling)
+            autoScrolling: scrollCaptureAutoScrolling,
+            axis: scrollCaptureAxis)
         if let win = window {
             scrollCaptureHUDPanel?.position(relativeTo: selectionRect, in: win)
         }
@@ -5578,7 +5583,10 @@ class OverlayView: NSView {
             // Auto-trigger scroll capture if triggered from "Scroll Capture"
             if autoScrollCaptureMode {
                 autoScrollCaptureMode = false
-                overlayDelegate?.overlayViewDidRequestScrollCapture(rect: selectionRect)
+                overlayDelegate?.overlayViewDidRequestScrollCapture(
+                    rect: selectionRect,
+                    axis: autoScrollCaptureAxis
+                )
             }
             // Auto-confirm for "Add Capture" — just confirm selection, no save/copy
             if autoConfirmMode {
@@ -6156,6 +6164,8 @@ class OverlayView: NSView {
         case .translate:
             showTranslatePopover(
                 anchorRect: anchorView.convert(anchorView.bounds, to: self), anchorView: anchorView)
+        case .scrollCapture:
+            showScrollCaptureAxisMenu(anchorView: anchorView)
         case .micAudio:
             showMicDeviceMenu(anchorView: anchorView)
         case .showKeystrokes:
@@ -6165,6 +6175,40 @@ class OverlayView: NSView {
         default:
             break
         }
+    }
+
+    /// Shows the axis picker for scroll capture so left-click can remain the fast vertical path
+    /// while right-click exposes the horizontal capture entry.
+    private func showScrollCaptureAxisMenu(anchorView: NSView) {
+        let menu = NSMenu()
+
+        let verticalItem = NSMenuItem(
+            title: ScrollCaptureAxis.vertical.localizedTitle,
+            action: #selector(startVerticalScrollCaptureFromMenu),
+            keyEquivalent: ""
+        )
+        verticalItem.target = self
+        menu.addItem(verticalItem)
+
+        let horizontalItem = NSMenuItem(
+            title: ScrollCaptureAxis.horizontal.localizedTitle,
+            action: #selector(startHorizontalScrollCaptureFromMenu),
+            keyEquivalent: ""
+        )
+        horizontalItem.target = self
+        menu.addItem(horizontalItem)
+
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: anchorView.bounds.height), in: anchorView)
+    }
+
+    /// Starts the default vertical scroll capture from the toolbar context menu.
+    @objc private func startVerticalScrollCaptureFromMenu() {
+        overlayDelegate?.overlayViewDidRequestScrollCapture(rect: selectionRect, axis: .vertical)
+    }
+
+    /// Starts the horizontal scroll capture from the toolbar context menu.
+    @objc private func startHorizontalScrollCaptureFromMenu() {
+        overlayDelegate?.overlayViewDidRequestScrollCapture(rect: selectionRect, axis: .horizontal)
     }
 
     private func showKeystrokeModeMenu(anchorView: NSView) {
@@ -6629,7 +6673,7 @@ class OverlayView: NSView {
         case .detach:
             overlayDelegate?.overlayViewDidRequestDetach()
         case .scrollCapture:
-            overlayDelegate?.overlayViewDidRequestScrollCapture(rect: selectionRect)
+            overlayDelegate?.overlayViewDidRequestScrollCapture(rect: selectionRect, axis: .vertical)
         case .addCapture:
             overlayDelegate?.overlayViewDidRequestAddCapture()
         case .recordSettings:
