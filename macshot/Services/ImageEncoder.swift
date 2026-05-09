@@ -181,45 +181,41 @@ enum ImageEncoder {
 
     /// Path to the clipboard temp subfolder. Always exists after first
     /// access — created on demand with `createDirectory(withIntermediateDirectories: true)`.
-    /// Also adopts any file already in the folder as the "current" one so
-    /// a clean restart (no crash, but app did quit) doesn't end up with
-    /// two clipboard files after the next copy: the *one* leftover is
-    /// treated as our previous file and replaced on next write.
     static let clipboardTmpDirectory: URL = {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent(clipboardTmpSubfolder)
         if !FileManager.default.fileExists(atPath: dir.path) {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
-        // Adopt any leftover file so the next copy replaces it. If the
-        // folder has several files (shouldn't happen, but defensively),
-        // pick the newest by modification date and delete the rest.
-        if let contents = try? FileManager.default.contentsOfDirectory(
-            at: dir,
-            includingPropertiesForKeys: [.contentModificationDateKey],
-            options: [.skipsHiddenFiles]
-        ), !contents.isEmpty {
-            let sorted = contents.sorted { lhs, rhs in
-                let ld = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                let rd = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                return ld > rd
-            }
-            clipboardLock.lock()
-            currentClipboardFileURL = sorted.first
-            clipboardLock.unlock()
-            // Delete every file *except* the adopted one.
-            for stale in sorted.dropFirst() {
-                try? FileManager.default.removeItem(at: stale)
-            }
-        }
         return dir
     }()
 
-    /// Lock protecting `currentClipboardFileURL` — writes happen on a
-    /// background queue while `copyToClipboard` gets called from the main
-    /// queue, so the pointer needs synchronization.
-    private static let clipboardLock = NSLock()
-    private static var currentClipboardFileURL: URL?
+    /// Maximum age for clipboard image files that external apps may still reference.
+    private static let clipboardFileTTL: TimeInterval = 24 * 60 * 60
+
+    /// Removes old clipboard image files while preserving recent paste targets.
+    private static func sweepExpiredClipboardFiles() {
+        let cutoff = Date().addingTimeInterval(-clipboardFileTTL)
+        let fm = FileManager.default
+
+        // Read only direct child files so unrelated temporary directories are untouched.
+        guard let contents = try? fm.contentsOfDirectory(
+            at: clipboardTmpDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
+        ) else { return }
+
+        for url in contents {
+            // Skip active or malformed entries unless they are known regular files.
+            guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey]),
+                  values.isRegularFile == true,
+                  let modified = values.contentModificationDate,
+                  modified < cutoff else { continue }
+
+            // Deletion is best-effort; launch cleanup will retry later if needed.
+            try? fm.removeItem(at: url)
+        }
+    }
 
     /// Copy image to pasteboard as PNG.
     /// Explicitly sets PNG data so receiving apps (browsers, editors) get
@@ -229,14 +225,13 @@ enum ImageEncoder {
     /// something like `macshot-clipboard.png`.
     ///
     /// Disk hygiene:
-    ///   - At most ONE clipboard temp file exists at any time. The
-    ///     previous copy's file is deleted just before the new one is
-    ///     written — the pasteboard's file-URL reference is updated in
-    ///     lockstep so no paste ever points at a deleted file.
-    ///   - The file lives in `tmp/macshot-clipboard/` so launch-time
-    ///     cleanup can wipe the whole folder if we miss the delete for
-    ///     any reason (crash, force-quit) without needing to match
-    ///     user-controlled filename patterns.
+    ///   - Each copy gets its own short-lived file because chat apps may
+    ///     keep the file URL after paste and only read it when the message
+    ///     is sent. Deleting the previous file during the next screenshot
+    ///     makes earlier pasted images fail with "file not found".
+    ///   - Files live in `tmp/macshot-clipboard/` and are swept after 24
+    ///     hours, which keeps multi-image paste reliable without letting
+    ///     abandoned temporary files accumulate indefinitely.
     static func copyToClipboard(_ image: NSImage) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
@@ -244,11 +239,12 @@ enum ImageEncoder {
             guard let bitmap = makeBitmap(image),
                   let pngData = bitmap.representation(using: .png, properties: [:]) else { return }
 
+            // Keep recent files for pasted-but-not-yet-sent chat drafts, then prune old leftovers.
+            sweepExpiredClipboardFiles()
+
             // Compute the new file path with a date-stamped filename so
             // Finder pastes land as a nicely named file. A counter suffix
-            // guards the very unlikely case where two copies in the same
-            // second produce the same name and we somehow haven't cleaned
-            // up the previous file yet.
+            // keeps rapid repeated captures from colliding within the same second.
             let dir = clipboardTmpDirectory
             var candidate = dir.appendingPathComponent(FilenameFormatter.defaultImageFilename())
             var counter = 2
@@ -261,22 +257,8 @@ enum ImageEncoder {
             }
             let newURL = candidate
 
-            // Write the new file first (atomic → no partial reads by any
-            // in-flight Finder paste); only delete the previous one once
-            // the write succeeded so there's never a window where no file
-            // is on disk yet the pasteboard points at one.
+            // Write atomically so receiving apps never observe a partially written image file.
             let writeOK = (try? pngData.write(to: newURL, options: .atomic)) != nil
-
-            clipboardLock.lock()
-            let oldURL = currentClipboardFileURL
-            currentClipboardFileURL = writeOK ? newURL : oldURL
-            clipboardLock.unlock()
-
-            if writeOK, let old = oldURL, old != newURL {
-                // Best-effort: any failure here is harmless — the launch
-                // sweep is a backstop.
-                try? FileManager.default.removeItem(at: old)
-            }
 
             let fileURL = writeOK ? newURL : nil
             DispatchQueue.main.async {
