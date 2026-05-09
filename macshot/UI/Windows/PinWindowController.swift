@@ -16,6 +16,7 @@ class PinWindowController {
     private var image: NSImage
     private var initialWindowSize: NSSize
     private var initialWindowOrigin: NSPoint
+    private var currentScale: CGFloat = 1.0
     private static let minScale: CGFloat = 0.1
     private static let maxScale: CGFloat = 5.0
 
@@ -48,10 +49,11 @@ class PinWindowController {
 
         let panel = PinPanel(
             contentRect: NSRect(origin: origin, size: windowSize),
-            styleMask: [.borderless, .nonactivatingPanel],
+            styleMask: [.borderless],
             backing: .buffered,
             defer: false
         )
+        panel.isFloatingPanel = true
         panel.level = .floating
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -62,8 +64,8 @@ class PinWindowController {
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.contentAspectRatio = size
-        // Allow scroll/magnify events to reach the view even when panel is not key
-        panel.becomesKeyOnlyIfNeeded = true
+        // Allow scroll events to reach the view
+        panel.becomesKeyOnlyIfNeeded = false
 
         let view = PinView(image: image)
         view.frame = NSRect(origin: .zero, size: windowSize)
@@ -98,9 +100,8 @@ class PinWindowController {
         let oldSize = oldFrame.size
 
         // Compute new size, clamped
-        let currentScale = oldSize.width / initialWindowSize.width
         let newScale = min(Self.maxScale, max(Self.minScale, currentScale * factor))
-        if abs(newScale - currentScale) < 0.001 { return }
+        if newScale == currentScale { return }
 
         let newSize = NSSize(
             width: round(initialWindowSize.width * newScale),
@@ -119,12 +120,18 @@ class PinWindowController {
             y: cursorScreenPoint.y - fractionY * newSize.height
         )
 
-        window.setFrame(NSRect(origin: newOrigin, size: newSize), display: true)
+        currentScale = newScale
+        
+        let newFrame = NSRect(origin: newOrigin, size: newSize)
+        if oldFrame != newFrame {
+            window.setFrame(newFrame, display: true)
+        }
         pinView?.zoomPercent = Int(round(newScale * 100))
     }
 
     private func resetZoom() {
         guard let window = window else { return }
+        currentScale = 1.0
         window.setFrame(NSRect(origin: initialWindowOrigin, size: initialWindowSize), display: true)
         pinView?.zoomPercent = 100
     }
@@ -156,7 +163,7 @@ class PinWindowController {
 
         let oldFrame = window.frame
         let oldBaseSize = initialWindowSize
-        let scale = oldBaseSize.width > 0 ? oldFrame.width / oldBaseSize.width : 1.0
+        let scale = currentScale
         let newBaseSize = NSSize(width: oldBaseSize.height, height: oldBaseSize.width)
         let newFrameSize = NSSize(width: newBaseSize.width * scale, height: newBaseSize.height * scale)
         // Keep the visual center stable so rotating a pin does not jump to another part of the screen.
@@ -452,7 +459,29 @@ private class PinView: NSView {
         }
     }
 
+    /// Allows a pinned image to begin dragging on the very first click even when macshot is not the active app.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        // Deliver the initial click directly to the pin view so drag gestures do not require a focus click first.
+        return true
+    }
+
+    /// Restores the AppKit event target required for trackpad magnify gestures after the pin has lost focus.
+    private func restoreGestureEventTargetAfterFocusLoss() {
+        // Mouse events can arrive on a non-activating panel while macshot remains inactive; gestures need the app active.
+        if !NSApp.isActive {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+
+        // Activation is asynchronous, so make the pin key on the next turn when AppKit has updated app focus.
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, let window = self.window else { return }
+            window.makeKey()
+        }
+    }
+
     override func mouseDown(with event: NSEvent) {
+        restoreGestureEventTargetAfterFocusLoss()
+
         let loc = convert(event.locationInWindow, from: nil)
         if let label = zoomLabel, !label.isHidden, label.frame.contains(loc) {
             onResetZoom?()
