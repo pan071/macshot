@@ -770,24 +770,54 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     }
 
     private func performCapture() {
-        // Show transparent overlays instantly — zero delay.
-        // The user sees the live desktop through the overlay and can start
-        // selecting immediately. The screenshot captures in the background
-        // and is set on the overlay when ready.
+        // Capture the screen before macshot steals focus so transient UI from
+        // the previous app (for example context menus) remains visible.
+        let excludeIDs = thumbnailControllers.compactMap { $0.windowNumber }
+        ScreenCaptureManager.captureAllScreens(excludingWindowNumbers: excludeIDs) { [weak self] captures in
+            guard let self = self else { return }
+
+            if captures.isEmpty {
+                self.dismissOverlays(refocusPreviousApp: true)
+                self.showOnboarding()
+                return
+            }
+
+            self.presentCapturedScreens(captures)
+        }
+    }
+
+    /// Creates overlay windows from already-captured screenshots, then activates
+    /// macshot so interaction starts only after the transient UI has been frozen.
+    /// - Parameter captures: Screen captures collected before macshot became frontmost.
+    private func presentCapturedScreens(_ captures: [ScreenCapture]) {
         let screens = NSScreen.screens
         let mouseScreen = screens.first { $0.frame.contains(NSEvent.mouseLocation) }
-        for screen in screens {
-            let controller = OverlayWindowController(screen: screen)
+        let screenOrder = Dictionary(uniqueKeysWithValues: screens.enumerated().map { ($1, $0) })
+        let orderedCaptures = captures.sorted {
+            (screenOrder[$0.screen] ?? Int.max) < (screenOrder[$1.screen] ?? Int.max)
+        }
+
+        NSApp.activate(ignoringOtherApps: true)
+
+        for capture in orderedCaptures {
+            let controller = OverlayWindowController(capture: capture)
             controller.overlayDelegate = self
             controller.capturedWindowTitle = capturedWindowTitle
-            if pendingRecordMode { controller.setAutoRecordMode() }
-            if pendingOCRMode { controller.setAutoOCRMode() }
-            if pendingQuickCaptureMode { controller.setAutoQuickSaveMode() }
+            if pendingRecordMode {
+                controller.setAutoRecordMode()
+            }
+            if pendingOCRMode {
+                controller.setAutoOCRMode()
+            }
+            if pendingQuickCaptureMode {
+                controller.setAutoQuickSaveMode()
+            }
             if pendingScrollCaptureMode {
                 controller.setAutoScrollCaptureMode(axis: pendingScrollCaptureAxis)
             }
             controller.showOverlay()
-            let isMouseScreen = (screen == mouseScreen) || (mouseScreen == nil && screen == NSScreen.main)
+            let isMouseScreen =
+                (capture.screen == mouseScreen) || (mouseScreen == nil && capture.screen == NSScreen.main)
             if (pendingFullScreen || pendingFullScreenRecord) && isMouseScreen {
                 controller.applyFullScreenSelection()
             }
@@ -801,7 +831,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         }
 
         CATransaction.flush()
-        NSApp.activate(ignoringOtherApps: true)
 
         pendingRecordMode = false
         pendingFullScreenRecordAutoStart = false
@@ -811,29 +840,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         pendingFullScreen = false
         pendingFullScreenRecord = false
 
-        // Capture screenshots in background — exclude overlay windows + thumbnails.
-        let excludeIDs = thumbnailControllers.compactMap { $0.windowNumber }
-            + overlayControllers.compactMap { $0.windowNumber }
-        ScreenCaptureManager.captureAllScreens(excludingWindowNumbers: excludeIDs) { [weak self] captures in
-            guard let self = self else { return }
-
-            if captures.isEmpty {
-                self.dismissOverlays(refocusPreviousApp: true)
-                self.showOnboarding()
-                return
-            }
-
-            for capture in captures {
-                if let controller = self.overlayControllers.first(where: { $0.screen == capture.screen }) {
-                    controller.setScreenshot(capture.image)
-                }
-            }
-
-            // Apply last selection area if "Capture Last Area" was triggered
-            if self.pendingRestoreLastArea {
-                self.pendingRestoreLastArea = false
-                self.restoreLastSelection(controllers: self.overlayControllers)
-            }
+        // Apply last selection area if "Capture Last Area" was triggered.
+        if pendingRestoreLastArea {
+            pendingRestoreLastArea = false
+            restoreLastSelection(controllers: overlayControllers)
         }
     }
 
