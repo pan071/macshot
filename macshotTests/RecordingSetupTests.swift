@@ -196,7 +196,7 @@ private final class RecordingSetupDelegate: OverlayViewDelegate {
     func overlayViewDidRequestStartRecording(rect: NSRect) {}
     func overlayViewDidRequestStopRecording() {}
     func overlayViewDidRequestDetach() {}
-    func overlayViewDidRequestScrollCapture(rect: NSRect) {}
+    func overlayViewDidRequestScrollCapture(rect: NSRect, axis: ScrollCaptureAxis) {}
     func overlayViewDidRequestStopScrollCapture() {}
     func overlayViewDidRequestCancelScrollCapture() {}
     func overlayViewDidRequestToggleAutoScroll() {}
