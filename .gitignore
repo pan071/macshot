@@ -9,3 +9,13 @@ DerivedData/
 .claude/
 __pycache__/
 *.pyc
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# AI agent local config
+.agents/
+.codex/
+AGENTS.md
