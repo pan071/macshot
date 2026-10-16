@@ -748,7 +748,7 @@ final class VideoTimelineView: NSView {
     /// Snaps to the playhead, trim edges and other item edges within 7 pt.
     private func snap(_ t: Double, excluding: VideoSelection?) -> Double {
         let threshold = Double(7 / effectivePointsPerSecond)
-        var candidates = [delegate?.timelineCurrentTime(self) ?? -1, document.project.trimStart, document.project.trimEnd,
+        var candidates: [Double] = [delegate?.timelineCurrentTime(self) ?? -1, document.project.trimStart, document.project.trimEnd,
                           0, document.duration]
         for item in items where item.selection != excluding {
             candidates.append(item.start)
