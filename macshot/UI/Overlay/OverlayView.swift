@@ -3763,7 +3763,7 @@ class OverlayView: NSView {
 
         // Save the pre-rotation image so Undo can restore the previous bitmap state.
         let prevImage = original.copy() as! NSImage
-        undoStack.append(.imageTransform(previousImage: prevImage, annotationOffsets: []))
+        undoStack.append(.imageTransform(previousImage: prevImage, previousSnappedWindowImage: nil, annotationOffsets: []))
         redoStack.removeAll()
 
         let sourceWidth = cgImage.width
@@ -5548,7 +5548,6 @@ class OverlayView: NSView {
 
         isToolbarSelectionMoveActive = false
         hoveredTooltip = hoveredTooltipButtonView?.tooltipText
-        scheduleBarcodeDetection()
         needsDisplay = true
     }
 
